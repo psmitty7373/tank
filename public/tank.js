@@ -7,7 +7,7 @@ function isPrivateAddress(ipaddress) {
 
 function connect() {
     if(isPrivateAddress(location.host))
-            websocket_url = "ws://" + location.host + ':8000/tank_ws';
+            websocket_url = "ws://" + location.hostname + ':8000/tank_ws';
     else
             websocket_url = "wss://" + location.hostname + '/tank_ws';
 
@@ -48,24 +48,37 @@ setInterval(function() {
 }, 100);
 
 function toggleFullScreen() {
-      var doc = window.document;
-      var docEl = doc.documentElement;
+    var doc = window.document;
+    var docEl = doc.documentElement;
 
-      var requestFullScreen = docEl.requestFullscreen || docEl.mozRequestFullScreen || docEl.webkitRequestFullScreen || docEl.msRequestFullscreen;
-      var cancelFullScreen = doc.exitFullscreen || doc.mozCancelFullScreen || doc.webkitExitFullscreen || doc.msExitFullscreen;
+    var requestFullScreen = docEl.requestFullscreen || docEl.mozRequestFullScreen || docEl.webkitRequestFullScreen || docEl.msRequestFullscreen;
+    var cancelFullScreen = doc.exitFullscreen || doc.mozCancelFullScreen || doc.webkitExitFullscreen || doc.msExitFullscreen;
 
-      if(!doc.fullscreenElement && !doc.mozFullScreenElement && !doc.webkitFullscreenElement && !doc.msFullscreenElement) {
-              requestFullScreen.call(docEl);
-            }
-      else {
-              cancelFullScreen.call(doc);
-            }
+    if (!doc.fullscreenElement && !doc.mozFullScreenElement && !doc.webkitFullscreenElement && !doc.msFullscreenElement) {
+        requestFullScreen.call(docEl);
+    } else {
+        cancelFullScreen.call(doc);
+    }
 }
+
+document.getElementById("fullscreen-button").addEventListener("click", function() {
+    toggleFullScreen();
+}, false);
+
+document.getElementById("steering-button").addEventListener("click", function() {
+    if (document.getElementById("interface").style.pointerEvents == "all") {
+        document.getElementById("interface").style.pointerEvents = "none";
+        document.getElementById("steering-button").style.backgroundColor = "red";
+    } else {
+        document.getElementById("interface").style.pointerEvents = "all";
+        document.getElementById("steering-button").style.backgroundColor = "green";
+    }
+}, false);
 
 var websocketSignalingChannel = new WebSocketSignalingChannel(document.getElementById("remoteVideo"));
 
 (function() {
     connect();
     websocketSignalingChannel.doSignalingConnect()
-    toggleFullScreen();
+                
 })();

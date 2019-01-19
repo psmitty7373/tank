@@ -39,39 +39,56 @@ def steering(x, y, minJoystick, maxJoystick, minSpeed, maxSpeed):
 
 	return (round(rightOut), round(leftOut))
 
+right_pwm = 17
+right_s1 = 27
+right_s2 = 22
+
+left_pwm = 10
+left_s1 = 9
+left_s2 = 11
+
 class Tank(multiprocessing.Process):
     def __init__(self, task):
         super(Tank, self).__init__()
+
         import pigpio
         self.pi = pigpio.pi('localhost', 9999)
-        self.pi.set_mode(17, pigpio.OUTPUT)
-        self.pi.set_mode(27, pigpio.OUTPUT)
-        self.pi.set_mode(22, pigpio.OUTPUT)
-        self.pi.write(27, 0)
-        self.pi.write(22, 1)
 
-        #left
-        self.pi.set_mode(10, pigpio.OUTPUT)
-        self.pi.set_mode(9, pigpio.OUTPUT)
-        self.pi.set_mode(11, pigpio.OUTPUT)
-        self.pi.write(9, 1)
-        self.pi.write(11, 0)
-
-        self.left_dir = 'f'
+        #right
+        self.pi.set_mode(right_pwm, pigpio.OUTPUT)
+        self.pi.set_mode(right_s1, pigpio.OUTPUT)
+        self.pi.set_mode(right_s2, pigpio.OUTPUT)
+        self.pi.write(right_s1, 0)
+        self.pi.write(right_s2, 1)
         self.right_dir = 'f'
-        self.brake_time = 100#ms
-        self.left_braking = False
         self.right_braking = False
-        self.left_brake_time = time.time() * 1000
         self.right_brake_time = time.time() * 1000
 
+        #left
+        self.pi.set_mode(left_pwm, pigpio.OUTPUT)
+        self.pi.set_mode(left_s1, pigpio.OUTPUT)
+        self.pi.set_mode(left_s2, pigpio.OUTPUT)
+        self.pi.write(left_s1, 1)
+        self.pi.write(left_s2, 0)
+        self.left_dir = 'f'
+        self.left_braking = False
+        self.left_brake_time = time.time() * 1000
+
+        self.brake_time = 100#ms
+        self.failsafe_time = time.time() * 1000
         self.tasks = tasks
         print("Tank Init Complete!")
      
     def run(self):
         print("Running!")
         while True:
-            if not self.tasks.empty():
+            # if no update in a second, stop motors
+            if time.time() * 1000 - self.failsafe_time > 1000:
+                self.pi.set_servo_pulsewidth(left_pwm, 0)
+                self.pi.set_servo_pulsewidth(right_pwm, 0)
+
+            while not self.tasks.empty():
+                self.failsafe_time = time.time() * 1000
                 r, l = self.tasks.get()
 
                 # right motor
@@ -80,49 +97,45 @@ class Tank(multiprocessing.Process):
                     if self.right_dir == 'b':
                         # start braking
                         if not self.right_braking:
-                            print("brake_right")
                             self.right_braking = True
                             self.right_brake_time = time.time() * 1000
-                            self.pi.write(27, 0)
-                            self.pi.write(22, 0)
+                            self.pi.write(right_s1, 0)
+                            self.pi.write(right_s2, 0)
 
                         # done braking
                         if time.time() * 1000 - self.right_brake_time > self.brake_time:
-                            print("done_brake_right")
                             self.right_braking = False
-                            self.pi.write(27, 0)
-                            self.pi.write(22, 1)
+                            self.pi.write(right_s1, 0)
+                            self.pi.write(right_s2, 1)
                             self.right_dir = 'f'
 
                     # same dir, cancel braking
                     elif self.right_braking:
                         self.right_braking = False
-                        self.pi.write(27, 0)
-                        self.pi.write(22, 1)
+                        self.pi.write(right_s1, 0)
+                        self.pi.write(right_s2, 1)
 
                 elif r < 0:
                     if self.right_dir == 'f':
                         # start braking
                         if not self.right_braking:
-                            print("brake_right")
                             self.right_braking = True
                             self.right_brake_time = time.time() * 1000
-                            self.pi.write(27, 0)
-                            self.pi.write(22, 0)
+                            self.pi.write(right_s1, 0)
+                            self.pi.write(right_s2, 0)
 
                         # done braking
                         if time.time() * 1000 - self.right_brake_time > self.brake_time:
-                            print("done_brake_right")
                             self.right_braking = False
-                            self.pi.write(27, 1)
-                            self.pi.write(22, 0)
+                            self.pi.write(right_s1, 1)
+                            self.pi.write(right_s2, 0)
                             self.right_dir = 'b'
 
                     # same dir, cancel braking
                     elif self.right_braking:
                         self.right_braking = False
-                        self.pi.write(27, 1)
-                        self.pi.write(22, 0)
+                        self.pi.write(right_s1, 1)
+                        self.pi.write(right_s2, 0)
 
                 # left motor
                 if l > 0: # forward
@@ -130,60 +143,55 @@ class Tank(multiprocessing.Process):
                     if self.left_dir == 'b':
                         # start braking
                         if not self.left_braking:
-                            print("brake_left")
                             self.left_braking = True
                             self.left_brake_time = time.time() * 1000
-                            self.pi.write(9, 0)
-                            self.pi.write(11, 0)
+                            self.pi.write(left_s1, 0)
+                            self.pi.write(left_s2, 0)
 
                         # done braking
                         if time.time() * 1000 - self.left_brake_time > self.brake_time:
-                            print("done_brake_left")
                             self.left_braking = False
-                            self.pi.write(9, 1)
-                            self.pi.write(11, 0)
+                            self.pi.write(left_s1, 1)
+                            self.pi.write(left_s2, 0)
                             self.left_dir = 'f'
 
                     # same dir, cancel braking
                     elif self.left_braking:
                         self.left_braking = False
-                        self.pi.write(9, 1)
-                        self.pi.write(11, 0)
+                        self.pi.write(left_s1, 1)
+                        self.pi.write(left_s2, 0)
 
                 elif l < 0:
-                    print(self.left_dir)
                     if self.left_dir == 'f':
                         # start braking
                         if not self.left_braking:
-                            print("brake_left")
                             self.left_braking = True
                             self.left_brake_time = time.time() * 1000
-                            self.pi.write(9, 0)
-                            self.pi.write(11, 0)
+                            self.pi.write(left_s1, 0)
+                            self.pi.write(left_s2, 0)
 
                         # done braking
                         if time.time() * 1000 - self.left_brake_time > self.brake_time:
-                            print("done_brake_left")
                             self.left_braking = False
-                            self.pi.write(9, 0)
-                            self.pi.write(11, 1)
+                            self.pi.write(left_s1, 0)
+                            self.pi.write(left_s2, 1)
                             self.left_dir = 'b'
 
                     # same dir, cancel braking
                     elif self.left_braking:
                         self.left_braking = False
-                        self.pi.write(9, 0)
-                        self.pi.write(11, 1)
+                        self.pi.write(left_s1, 0)
+                        self.pi.write(left_s2, 1)
 
                 if r == 0 or self.right_braking:
-                    self.pi.set_servo_pulsewidth(10, 0)
+                    self.pi.set_servo_pulsewidth(left_pwm, 0)
                 else:
-                    self.pi.set_servo_pulsewidth(10, translate(abs(r), 0, 100, 500, 2500))
+                    self.pi.set_servo_pulsewidth(left_pwm, translate(abs(r), 0, 100, 500, 2500))
 
                 if l == 0 or self.left_braking:
-                    self.pi.set_servo_pulsewidth(17, 0)
+                    self.pi.set_servo_pulsewidth(right_pwm, 0)
                 else:
-                    self.pi.set_servo_pulsewidth(17, translate(abs(l), 0, 100, 500, 2500))
+                    self.pi.set_servo_pulsewidth(right_pwm, translate(abs(l), 0, 100, 500, 2500))
             time.sleep(0.01)
 
 
