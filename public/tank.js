@@ -17,6 +17,15 @@ function connect() {
             connect();
         }, 500);
     }
+    ws.onmessage = function(event) {
+        document.getElementById("status-bar").innerHTML = event.data;
+        msg = JSON.parse(event.data);
+        let canvas = document.getElementById("minimap");
+        let context = canvas.getContext("2d");
+        context.fillStyle = "black";
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.fillRect(msg.x/10, msg.y/10, 3, 3);
+    };
 }
 
 console.log("touchscreen is", VirtualJoystick.touchScreenAvailable() ? "available" : "not available");
