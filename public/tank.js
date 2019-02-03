@@ -5,6 +5,8 @@ function isPrivateAddress(ipaddress) {
             (parts[0] === '192' && parts[1] === '168');
 };
 
+pos_log = [];
+
 function connect() {
     if(isPrivateAddress(location.host))
             websocket_url = "ws://" + location.hostname + ':8000/tank_ws';
@@ -22,9 +24,15 @@ function connect() {
         msg = JSON.parse(event.data);
         let canvas = document.getElementById("minimap");
         let context = canvas.getContext("2d");
-        context.fillStyle = "black";
         context.clearRect(0, 0, canvas.width, canvas.height);
-        context.fillRect(msg.x/10, msg.y/10, 3, 3);
+        pos_log.unshift({x: msg.x * 100, y: msg.y * 100});
+        pos_log = pos_log.splice(0,50);
+        context.fillStyle = "black";
+        for (i = 0; i < pos_log.length; i++) {
+            context.fillRect(pos_log[i].x, pos_log[i].y, 2, 2);
+        }
+        context.fillStyle = "red";
+        context.fillRect(msg.x * 100, msg.y * 100, 4, 4);
     };
 }
 
@@ -89,5 +97,7 @@ var websocketSignalingChannel = new WebSocketSignalingChannel(document.getElemen
 (function() {
     connect();
     websocketSignalingChannel.doSignalingConnect()
-                
+    let canvas = document.getElementById("minimap");
+    canvas.width = 300;
+    canvas.height = 300;
 })();

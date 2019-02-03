@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
-import json, math, multiprocessing, os, struct, time
+import json, math, multiprocessing, pfilter, os, signal, struct, time
+from functools import partial
 import tornado.ioloop
 import tornado.web as web
 import tornado.websocket
@@ -57,6 +58,9 @@ class Tank(multiprocessing.Process):
         super(Tank, self).__init__()
 
         import pigpio
+
+        signal.signal(signal.SIGINT, self.shutdown)
+
         self.pi = pigpio.pi('localhost', 9999)
 
         if serial_port_enabled:
@@ -93,9 +97,20 @@ class Tank(multiprocessing.Process):
         self.pos_x = 0
         self.pos_y = 0
         self.pos_z = 0
+        self.ppos_x = 0
+        self.ppos_y = 0
+        self.ppos_z = 0
         self.pos_quality = 0
         self.tasks = tasks
         self.results = results
+        self.running = True
+
+        #particle filter
+        self.pf = pfilter.ParticleFilter(200, 0.1, (10, 10, 10))
+
+
+    def shutdown(self, signal, frame):
+        self.running = False
 
     def update_uwb(self):
         rlv_type = 0
@@ -109,26 +124,49 @@ class Tank(multiprocessing.Process):
             self.process_rlv_pkt({ 'rlv_type': rlv_type, 'rlv_payload': rlv_payload })
 
     def process_rlv_pkt(self, pkt):
-        if pkt['rlv_type'] == 65 and len(pkt['rlv_payload']) == 13:
+        if pkt['rlv_type'] == 0:
+            return
+        elif pkt['rlv_type'] == 65 and len(pkt['rlv_payload']) == 13:
             self.pos_x, self.pos_y, self.pos_z, self.pos_quality = struct.unpack('<lllb', pkt['rlv_payload'])
+            self.pos_x = self.pos_x / 1000.0
+            self.pos_y = self.pos_y / 1000.0
+            self.pos_z = self.pos_z / 1000.0
+        elif pkt['rlv_type'] == 73:
+            num_distances = struct.unpack('<b', pkt['rlv_payload'][:1])[0]
+            for i in range(0, num_distances):
+                uwb_addr, distance, quality, pos_x, pos_y, pos_z, pos_quality = struct.unpack('<Hlblllb', pkt['rlv_payload'][1 + i * 20: 1 + (i+1) * 20])
+                self.pf.addRangeMeasurement(uwb_addr, [pos_x/1000.0, pos_y/1000.0, pos_z/1000.0], distance/1000.0, 0.3)
+#        else:
+#            print("Got:", pkt)
 
     def run(self):
         print("Running!")
-        while True:
+        while self.running:
             curr_time = time.time() * 1000
             # if no update in a second, stop motors
             if curr_time - self.failsafe_time > 1000:
                 self.pi.set_servo_pulsewidth(left_pwm, 0)
                 self.pi.set_servo_pulsewidth(right_pwm, 0)
 
-            if curr_time - self.position_time > 200:
-                self.pi.serial_write(self.s1, '\x02\x00')
+            if curr_time - self.position_time > 100:
+                self.position_time = curr_time
+#                self.pi.serial_write(self.s1, '\x02\x00') #get curr position
+                self.pi.serial_write(self.s1, '\x0c\x00') #get measurements
+                self.pf.update()
+                ep = self.pf.getEstimate()
+                self.ppos_x = ep[0]
+                self.ppos_y = ep[1]
+                self.ppos_z = ep[2]
 
             self.update_uwb()
 
             while not self.tasks.empty():
                 self.failsafe_time = curr_time
-                r, l = self.tasks.get()
+                task = self.tasks.get()
+                if task['task_type'] == "throttle_update":
+                    r, l = task['payload']
+                elif task['task_type'] == "shutdown":
+                    self.running = False
 
                 # right motor
                 if r > 0: # forward
@@ -235,8 +273,11 @@ class Tank(multiprocessing.Process):
                 #semd status back
                 if not self.results.full() and time.time() * 1000 - self.heartbeat_time > 200:
                     self.heartbeat_time = time.time() * 1000
-                    self.results.put({ 'current': self.current, 'volts': self.volts, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'quality': self.pos_quality })
+                    self.results.put({ 'current': self.current, 'volts': self.volts, 'x': self.ppos_x, 'y': self.ppos_y, 'z': self.ppos_z, 'quality': self.pos_quality })
             time.sleep(0.01)
+
+        print("Shutting down...")
+        self.pi.serial_close(self.s1)
 
 
 public = os.path.join(os.path.dirname(__file__), 'public')
@@ -258,7 +299,7 @@ class WebSocket(tornado.websocket.WebSocketHandler):
     def on_message(self, message):
         pos = json.loads(message)
         r, l = steering(pos['x'], pos['y'], -100, 100, -100, 100)
-        self.tasks.put((r,l))
+        self.tasks.put({'task_type': 'throttle_update', 'payload': (r,l)})
         while not self.results.empty():
             msg = self.results.get()
             [client.write_message(json.dumps(msg)) for client in self.connections]
@@ -273,7 +314,11 @@ def make_app(tasks, results):
         (r'/(.*)', web.StaticFileHandler, {'path': public}),
     ])
 
-if __name__ == "__main__":
+
+def signal_handler(signal, frame):
+    tornado.ioloop.IOLoop.current().stop()
+
+def main():
     tasks = multiprocessing.JoinableQueue()
     results = multiprocessing.Queue(maxsize=2)
     tank = Tank(tasks, results)
@@ -281,4 +326,8 @@ if __name__ == "__main__":
 
     webapp = make_app(tasks, results)
     webapp.listen(8000)
+    signal.signal(signal.SIGINT, signal_handler)
     tornado.ioloop.IOLoop.current().start()
+
+if __name__ == "__main__":
+    main()
