@@ -22,9 +22,24 @@ function connect() {
     ws.onmessage = function(event) {
         document.getElementById("status-bar").innerHTML = event.data;
         msg = JSON.parse(event.data);
-        let canvas = document.getElementById("minimap");
-        let context = canvas.getContext("2d");
+        // heading
+        if (!msg.a_x)
+            document.getElementById("heading").innerHTML = '000';
+        else
+            document.getElementById("heading").innerHTML = Math.round(msg.a_x).toString(10).padStart(3,'0');
+        // position & minimap
+        var canvas = document.getElementById("minimap");
+        var context = canvas.getContext("2d");
         context.clearRect(0, 0, canvas.width, canvas.height);
+
+        context.strokeStyle = "black";
+        context.fillStyle = "white";
+        context.beginPath();
+        context.lineWidth = 2;
+        context.arc(canvas.width/2 + 2, canvas.height/2 + 2, canvas.width / 2 - 4, 0, 2 * Math.PI);
+        context.stroke();
+        context.fill();
+
         pos_log.unshift({x: msg.x * 100, y: msg.y * 100});
         pos_log = pos_log.splice(0,50);
         context.fillStyle = "black";
@@ -33,6 +48,38 @@ function connect() {
         }
         context.fillStyle = "red";
         context.fillRect(msg.x * 100, msg.y * 100, 4, 4);
+
+        // reticle
+        canvas = document.getElementById("hud_canvas");
+        canvas.width = canvas.offsetWidth;
+        canvas.height = canvas.offsetHeight;
+        context = canvas.getContext("2d");
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.beginPath();
+        context.strokeStyle = "#00FF00";
+        context.lineWidth = 3;
+        context.arc(canvas.width/2, canvas.height/2, 10, 0, 2 * Math.PI);
+        context.stroke();
+        // right line
+        context.beginPath();
+        context.moveTo(canvas.width/2 + 10, canvas.height/2);
+        context.lineTo(canvas.width/2 + 65, canvas.height/2);
+        context.stroke();
+        // left line
+        context.beginPath();
+        context.moveTo(canvas.width/2 - 10, canvas.height/2);
+        context.lineTo(canvas.width/2 - 65, canvas.height/2);
+        context.stroke();
+        // top
+        context.beginPath();
+        context.moveTo(canvas.width/2, canvas.height/2 + 10);
+        context.lineTo(canvas.width/2, canvas.height/2 + 25);
+        context.stroke();
+        // bottom
+        context.beginPath();
+        context.moveTo(canvas.width/2, canvas.height/2 - 10);
+        context.lineTo(canvas.width/2, canvas.height/2 - 25);
+        context.stroke();
     };
 }
 

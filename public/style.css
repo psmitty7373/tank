@@ -4,6 +4,10 @@ body {
 	margin : 0;
 	background-color: #000000;
 }
+@font-face { 
+    font-family: "ocr-a-std";
+    src: url("ocr.woff2") format("woff2");
+}
 .menu-button {
     height: 10vh;
     width: 10vh;
@@ -28,19 +32,38 @@ body {
 	-webkit-user-select : none;
 	-moz-user-select : none;
 }
+#hud, #hud_canvas {
+    width: 100%;
+    height: 100%;
+    z-index: 5;
+    text-align: center;
+    vertical-align: middle;
+    position: absolute;
+    left: 0px;
+    top: 0px;
+}
+#heading {
+    width: 50px;
+    height: 25px;
+    line-height: 25px;
+    background-color: green;
+    top: 0px;
+    display: table;
+    margin: 0 auto;
+    font-family: ocr-a-std;
+}
 #interface {
-	z-index: 5;
+	z-index: 15;
 	position: absolute !important;
     pointer-events: none;
 }
 #minimap {
-    z-index: 4;
+    z-index: 7;
     position: absolute;
     left: 0px;
-    top: 25px;
+    top: 0px;
     width: 300px;
     height: 300px;
-    background-color: gray;
 }
 #remoteVideo {
 	z-index: 1;
@@ -53,10 +76,10 @@ body {
 	position: absolute;
 	left: 20%;
 	bottom: 0px;
-	z-index: 10;
+	z-index: 20;
 }
 #status-bar {
-    z-index: 4;
+    z-index: 5;
     position: absolute;
     left: 0px;
     top: 0px;

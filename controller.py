@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import json, math, multiprocessing, pfilter, os, signal, struct, time
+import BNO055, json, math, multiprocessing, pigpio, pfilter, os, signal, struct, time
 from functools import partial
 import tornado.ioloop
 import tornado.web as web
@@ -57,16 +57,25 @@ class Tank(multiprocessing.Process):
     def __init__(self, tasks, results):
         super(Tank, self).__init__()
 
-        import pigpio
+        self.running = True
 
+        # init signal handler
         signal.signal(signal.SIGINT, self.shutdown)
 
+        #init pigpio
         self.pi = pigpio.pi('localhost', 9999)
 
         if serial_port_enabled:
             self.s1 = self.pi.serial_open(serial_port, serial_port_baud)
         else:
             self.s1 = None
+
+        #init imu
+        self.bno = BNO055.BNO055()
+        if self.bno.begin() is not True:
+            print("Error initializing device")
+            return False
+        self.bno.setExternalCrystalUse(True)
 
         #right
         self.pi.set_mode(right_pwm, pigpio.OUTPUT)
@@ -90,24 +99,34 @@ class Tank(multiprocessing.Process):
 
         self.current = 0
         self.volts = 0
-        self.brake_time = 100#ms
+
+        # timers
+        self.brake_time = 100
         self.failsafe_time = time.time() * 1000
         self.heartbeat_time = time.time() * 1000
         self.position_time = time.time() * 1000
+
+        # position
         self.pos_x = 0
         self.pos_y = 0
         self.pos_z = 0
         self.ppos_x = 0
         self.ppos_y = 0
         self.ppos_z = 0
+        self.posm_x = []
+        self.posm_y = []
+        self.posm_z = []
         self.pos_quality = 0
+        self.azim_x = 0
+        self.azim_y = 0
+        self.azim_z = 0
+
+        # messaging
         self.tasks = tasks
         self.results = results
-        self.running = True
 
         #particle filter
         self.pf = pfilter.ParticleFilter(200, 0.1, (10, 10, 10))
-
 
     def shutdown(self, signal, frame):
         self.running = False
@@ -128,6 +147,14 @@ class Tank(multiprocessing.Process):
             return
         elif pkt['rlv_type'] == 65 and len(pkt['rlv_payload']) == 13:
             self.pos_x, self.pos_y, self.pos_z, self.pos_quality = struct.unpack('<lllb', pkt['rlv_payload'])
+            self.posm_x.append(self.pos_x)
+            self.posm_y.append(self.pos_y)
+            self.posm_z.append(self.pos_z)
+            # median position filter
+            if len(self.posm_x) > 3:
+                self.posm_x = self.posm_x[-3:]
+                self.posm_y = self.posm_y[-3:]
+                self.posm_z = self.posm_z[-3:]
             self.pos_x = self.pos_x / 1000.0
             self.pos_y = self.pos_y / 1000.0
             self.pos_z = self.pos_z / 1000.0
@@ -148,15 +175,14 @@ class Tank(multiprocessing.Process):
                 self.pi.set_servo_pulsewidth(left_pwm, 0)
                 self.pi.set_servo_pulsewidth(right_pwm, 0)
 
+            # get position info every 100ms
             if curr_time - self.position_time > 100:
                 self.position_time = curr_time
 #                self.pi.serial_write(self.s1, '\x02\x00') #get curr position
                 self.pi.serial_write(self.s1, '\x0c\x00') #get measurements
                 self.pf.update()
-                ep = self.pf.getEstimate()
-                self.ppos_x = ep[0]
-                self.ppos_y = ep[1]
-                self.ppos_z = ep[2]
+                self.ppos_x, self.ppos_y, self.ppos_z = self.pf.getEstimate()
+                self.azim_x, self.azim_y, self.azim_z = self.bno.getVector(BNO055.BNO055.VECTOR_EULER)
 
             self.update_uwb()
 
@@ -273,7 +299,7 @@ class Tank(multiprocessing.Process):
                 #semd status back
                 if not self.results.full() and time.time() * 1000 - self.heartbeat_time > 200:
                     self.heartbeat_time = time.time() * 1000
-                    self.results.put({ 'current': self.current, 'volts': self.volts, 'x': self.ppos_x, 'y': self.ppos_y, 'z': self.ppos_z, 'quality': self.pos_quality })
+                    self.results.put({ 'current': self.current, 'volts': self.volts, 'x': self.ppos_x, 'y': self.ppos_y, 'z': self.ppos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
             time.sleep(0.01)
 
         print("Shutting down...")
@@ -281,10 +307,14 @@ class Tank(multiprocessing.Process):
 
 
 public = os.path.join(os.path.dirname(__file__), 'public')
- 
+
 class MainHandler(tornado.web.RequestHandler):
     def get(self):
         self.render("index.html")
+
+class MyStaticFileHandler(tornado.web.StaticFileHandler):
+    def set_extra_headers(self, path):
+        self.set_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
 
 class WebSocket(tornado.websocket.WebSocketHandler):
     connections = set()
@@ -309,9 +339,8 @@ class WebSocket(tornado.websocket.WebSocketHandler):
  
 def make_app(tasks, results):
     return tornado.web.Application([
-        (r"/", MainHandler),
         (r"/tank_ws", WebSocket, {'tasks': tasks, 'results': results}),
-        (r'/(.*)', web.StaticFileHandler, {'path': public}),
+        (r'/(.*)', MyStaticFileHandler, {'path': public, "default_filename": "index.html"}),
     ])
 
 

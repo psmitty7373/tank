@@ -6,14 +6,18 @@
     </head>
     <body>
         <div id="container">
-            <video id="remoteVideo" autoplay playsinline muted width="100%" height="100%"></video>
+            <video id="remoteVideo" autoplay playsinline muted width="100%" height="100%" style="object-fit: fill"></video>
+            <div id="hud">
+                <div id="heading">000</div>
+                <canvas id="hud_canvas"></canvas>
+            </div>
             <div id="interface"></div>
             <div id="menu-bar">
                 <button id="steering-button" class="menu-button"></button>
                 <button id="fullscreen-button" class="menu-button"></button>
             </div>
             <canvas id="minimap"></canvas>
-            <div id="status-bar"></div>
+            <div id="status-bar" style="display:none;"></div>
         </div>
         <script src="virtualjoystick.js"></script>
         <script src="sdputils.js"></script>
