@@ -2,6 +2,7 @@
 
 import BNO055, json, math, multiprocessing, pigpio, pfilter, os, signal, struct, time
 from functools import partial
+from statistics import median
 import tornado.ioloop
 import tornado.web as web
 import tornado.websocket
@@ -151,10 +152,10 @@ class Tank(multiprocessing.Process):
             self.posm_y.append(self.pos_y)
             self.posm_z.append(self.pos_z)
             # median position filter
-            if len(self.posm_x) > 3:
-                self.posm_x = self.posm_x[-3:]
-                self.posm_y = self.posm_y[-3:]
-                self.posm_z = self.posm_z[-3:]
+            if len(self.posm_x) > 5:
+                self.posm_x = self.posm_x[-5:]
+                self.posm_y = self.posm_y[-5:]
+                self.posm_z = self.posm_z[-5:]
             self.pos_x = self.pos_x / 1000.0
             self.pos_y = self.pos_y / 1000.0
             self.pos_z = self.pos_z / 1000.0
@@ -299,7 +300,7 @@ class Tank(multiprocessing.Process):
                 #semd status back
                 if not self.results.full() and time.time() * 1000 - self.heartbeat_time > 200:
                     self.heartbeat_time = time.time() * 1000
-                    self.results.put({ 'current': self.current, 'volts': self.volts, 'x': self.ppos_x, 'y': self.ppos_y, 'z': self.ppos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
+                    self.results.put({ 'current': self.current, 'volts': self.volts, 'x': median(self.posm_x)/10.0, 'y': median(self.posm_y)/10.0, 'z': median(self.posm_z)/10.0, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
             time.sleep(0.01)
 
         print("Shutting down...")

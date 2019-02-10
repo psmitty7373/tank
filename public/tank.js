@@ -32,6 +32,12 @@ function connect() {
         var context = canvas.getContext("2d");
         context.clearRect(0, 0, canvas.width, canvas.height);
 
+        /*
+        context.save();
+        context.translate(canvas.width/2, canvas.height/2);
+        context.rotate((180 + msg.a_x) * Math.PI / 180);
+        context.translate(-canvas.width/2, -canvas.height/2);
+        */
         context.strokeStyle = "black";
         context.fillStyle = "white";
         context.beginPath();
@@ -40,14 +46,21 @@ function connect() {
         context.stroke();
         context.fill();
 
-        pos_log.unshift({x: msg.x * 100, y: msg.y * 100});
+        pos_log.unshift({x: msg.x, y: msg.y});
         pos_log = pos_log.splice(0,50);
-        context.fillStyle = "black";
+        last_pos = null;
         for (i = 0; i < pos_log.length; i++) {
-            context.fillRect(pos_log[i].x, pos_log[i].y, 2, 2);
+            if (last_pos && (last_pos.x != pos_log[i].x || last_pos.y != pos_log[i].y)) {
+                context.lineWidth = 1;
+                context.beginPath();
+                context.moveTo(last_pos.x, last_pos.y);
+                context.lineTo(pos_log[i].x, pos_log[i].y);
+                context.stroke();
+            }
+            last_pos = pos_log[i];
         }
         context.fillStyle = "red";
-        context.fillRect(msg.x * 100, msg.y * 100, 4, 4);
+        context.fillRect(msg.x, msg.y, 4, 4);
 
         // reticle
         canvas = document.getElementById("hud_canvas");
@@ -80,6 +93,7 @@ function connect() {
         context.moveTo(canvas.width/2, canvas.height/2 - 10);
         context.lineTo(canvas.width/2, canvas.height/2 - 25);
         context.stroke();
+
     };
 }
 
