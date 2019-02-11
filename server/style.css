@@ -1,0 +1,53 @@
+body {
+	overflow : hidden;
+	padding : 0;
+	margin : 0;
+	background-color: #000000;
+}
+@font-face { 
+    font-family: "ocr-a-std";
+    src: url("ocr.woff2") format("woff2");
+}
+.menu-button {
+    height: 10vh;
+    width: 10vh;
+    cursor: pointer;
+    padding: 10px;
+}
+#steering-button {
+	background: url("images/steering.png") no-repeat scroll 0 0 transparent;
+    background-color: red;
+    background-size: contain;
+}
+#fullscreen-button {
+	background: url("images/fullscreen.png") no-repeat scroll 0 0 transparent;
+    background-size: contain;
+}
+#container, #interface {
+	width : 100%;
+	height : 100%;
+	overflow : hidden;
+	padding : 0;
+	margin : 0;
+	-webkit-user-select : none;
+	-moz-user-select : none;
+}
+#interface {
+	z-index: 15;
+	position: absolute !important;
+    pointer-events: none;
+}
+#canvas {
+    width: 100%;
+    height: 100%;
+    background-color: white;
+}
+#menu-bar {
+	background: white;
+	width: 60%;
+	height: 10%;
+	position: absolute;
+	left: 20%;
+	bottom: 0px;
+	z-index: 20;
+}
