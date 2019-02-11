@@ -105,9 +105,9 @@ class Tank(multiprocessing.Process):
         self.brake_time = 100
         self.failsafe_time = time.time() * 1000
         self.heartbeat_time = time.time() * 1000
-        self.position_time = time.time() * 1000
 
         # position
+        self.pos_ready = False
         self.pos_x = 0
         self.pos_y = 0
         self.pos_z = 0
@@ -140,12 +140,18 @@ class Tank(multiprocessing.Process):
             rlv_type, rlv_payload_len = struct.unpack('<bb', rx_bytes)
             if rlv_payload_len > 0:
                 num_bytes, rlv_payload = self.pi.serial_read(self.s1, rlv_payload_len)
+        elif num_bytes == 0:
+            self.pi.serial_write(self.s1, '\x32\x00')
         if not rlv_type == 0:
             self.process_rlv_pkt({ 'rlv_type': rlv_type, 'rlv_payload': rlv_payload })
 
     def process_rlv_pkt(self, pkt):
         if pkt['rlv_type'] == 0:
             return
+        elif pkt['rlv_type'] == 0x5a:
+            status = struct.unpack('<b', pkt['rlv_payload'])[0]
+            if status & 1:
+                self.pos_ready = True
         elif pkt['rlv_type'] == 65 and len(pkt['rlv_payload']) == 13:
             self.pos_x, self.pos_y, self.pos_z, self.pos_quality = struct.unpack('<lllb', pkt['rlv_payload'])
             self.posm_x.append(self.pos_x)
@@ -171,21 +177,23 @@ class Tank(multiprocessing.Process):
         print("Running!")
         while self.running:
             curr_time = time.time() * 1000
+
+            self.update_uwb()
+
             # if no update in a second, stop motors
             if curr_time - self.failsafe_time > 1000:
                 self.pi.set_servo_pulsewidth(left_pwm, 0)
                 self.pi.set_servo_pulsewidth(right_pwm, 0)
 
-            # get position info every 100ms
-            if curr_time - self.position_time > 100:
-                self.position_time = curr_time
-#                self.pi.serial_write(self.s1, '\x02\x00') #get curr position
-                self.pi.serial_write(self.s1, '\x0c\x00') #get measurements
-                self.pf.update()
+            # position info ready
+            if self.pos_ready:
+                self.pos_ready = False
+                self.pi.serial_write(self.s1, '\x02\x00') #get curr position
+#                self.pi.serial_write(self.s1, '\x0c\x00') #get measurements
+                #self.pf.update()
                 self.ppos_x, self.ppos_y, self.ppos_z = self.pf.getEstimate()
                 self.azim_x, self.azim_y, self.azim_z = self.bno.getVector(BNO055.BNO055.VECTOR_EULER)
 
-            self.update_uwb()
 
             while not self.tasks.empty():
                 self.failsafe_time = curr_time
@@ -301,7 +309,7 @@ class Tank(multiprocessing.Process):
                 if not self.results.full() and time.time() * 1000 - self.heartbeat_time > 200:
                     self.heartbeat_time = time.time() * 1000
                     self.results.put({ 'current': self.current, 'volts': self.volts, 'x': median(self.posm_x)/10.0, 'y': median(self.posm_y)/10.0, 'z': median(self.posm_z)/10.0, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
-            time.sleep(0.01)
+            time.sleep(0.05)
 
         print("Shutting down...")
         self.pi.serial_close(self.s1)
@@ -346,6 +354,7 @@ def make_app(tasks, results):
 
 
 def signal_handler(signal, frame):
+    print("Stopping Tornado.")
     tornado.ioloop.IOLoop.current().stop()
 
 def main():

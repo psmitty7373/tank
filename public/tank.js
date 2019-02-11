@@ -5,7 +5,25 @@ function isPrivateAddress(ipaddress) {
             (parts[0] === '192' && parts[1] === '168');
 };
 
+anchors = [
+        {id: 'a', x: 0, y: 0, z: 0 },
+        {id: 'b', x: 0, y: 200, z: 0},
+        {id: 'c', x: 200, y: 200, z: 0},
+        {id: 'd', x: 200, y: 0, z: 0}
+];
 pos_log = [];
+
+function get_center() {
+    c_x = 0;
+    c_y = 0;
+    for (i = 0; i < anchors.length; i++) {
+                c_x += anchors[i].x;
+                c_y += anchors[i].y;
+            }
+    c_x = c_x / anchors.length;
+    c_y = c_y / anchors.length;
+    return { c_x: c_x, c_y: c_y };
+}
 
 function connect() {
     if(isPrivateAddress(location.host))
@@ -28,24 +46,28 @@ function connect() {
         else
             document.getElementById("heading").innerHTML = Math.round(msg.a_x).toString(10).padStart(3,'0');
         // position & minimap
-        var canvas = document.getElementById("minimap");
-        var context = canvas.getContext("2d");
-        context.clearRect(0, 0, canvas.width, canvas.height);
+		var canvas = document.getElementById("minimap");
+		var context = canvas.getContext("2d");
+		canvas.width  = canvas.offsetWidth;
+		canvas.height = canvas.offsetHeight;
 
-        /*
-        context.save();
-        context.translate(canvas.width/2, canvas.height/2);
-        context.rotate((180 + msg.a_x) * Math.PI / 180);
-        context.translate(-canvas.width/2, -canvas.height/2);
-        */
+		context.clearRect(0, 0, canvas.width, canvas.height);
+		context.transform(1, 0, 0, -1, 0, canvas.height);
+		center = get_center();
+
+		// draw minimap circle
         context.strokeStyle = "black";
         context.fillStyle = "white";
         context.beginPath();
         context.lineWidth = 2;
-        context.arc(canvas.width/2 + 2, canvas.height/2 + 2, canvas.width / 2 - 4, 0, 2 * Math.PI);
+        context.arc(canvas.width/2 + 1, canvas.height/2 + 1, canvas.width / 2 - 4, 0, 2 * Math.PI);
         context.stroke();
         context.fill();
 
+		// center map
+		context.translate(canvas.width/2 - center.c_x, canvas.height/2 - center.c_y);
+
+		// draw points
         pos_log.unshift({x: msg.x, y: msg.y});
         pos_log = pos_log.splice(0,50);
         last_pos = null;
@@ -61,6 +83,17 @@ function connect() {
         }
         context.fillStyle = "red";
         context.fillRect(msg.x, msg.y, 4, 4);
+
+		// draw anchors
+		for (i = 0; i < anchors.length; i++) {
+			if (i == 0)
+				context.fillStyle = "green";
+			else if (i == 3)
+				context.fillStyle = "purple";
+			else
+				context.fillStyle = "blue";
+			context.fillRect(anchors[i].x - 2, anchors[i].y - 2, 4, 4);
+		}
 
         // reticle
         canvas = document.getElementById("hud_canvas");
@@ -93,11 +126,8 @@ function connect() {
         context.moveTo(canvas.width/2, canvas.height/2 - 10);
         context.lineTo(canvas.width/2, canvas.height/2 - 25);
         context.stroke();
-
     };
 }
-
-console.log("touchscreen is", VirtualJoystick.touchScreenAvailable() ? "available" : "not available");
 
 var joystick = new VirtualJoystick({
     container : document.getElementById('interface'),
