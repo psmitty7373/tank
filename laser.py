@@ -1,11 +1,10 @@
 #!/usr/bin/python3
 
+#based off code from joan2937 @ https://github.com/joan2937/pigpio/issues/217
+
 import pigpio, time
 
 def carrier(gpio, frequency, micros, dutycycle=0.25):
-    """
-    Generate cycles of carrier on gpio with frequency and dutycycle.
-    """
     wf = []
     cycle = 1000000.0 / frequency
     cycles = int(round(micros/cycle))
@@ -16,6 +15,7 @@ def carrier(gpio, frequency, micros, dutycycle=0.25):
         sofar += on
         off = target - sofar
         sofar += off
+        print(off)
         wf.append(pigpio.pulse(1 << gpio, 0, on))
         wf.append(pigpio.pulse(0, 1 << gpio, off))
     return wf
@@ -26,7 +26,7 @@ class RC5:
         self.gpio = gpio
         self.address = address & 31
         self.toggle = 0
-        self.bip = bip(pi, gpio, 36000, 889, 889, True)
+        self.bip = bip(pi, gpio, 37900, 889, 889, True)
 
     def set_address(self, address):
         self.address = address & 31

@@ -35,18 +35,25 @@ class RC5_read:
         self.code = 1
         self.bits = 1
         self.state = STATE_MID1
-        self.last_fe = 0
+        self.last_fe = None
+        self.last_re = None
         self.first_re = None
+        self.last_call = None
+        self.auto_modulated = True
+        self.invert_logic = True
 
         pi.set_mode(gpio, pigpio.INPUT)
-        self.cb = pi.callback(gpio, pigpio.EITHER_EDGE, self.cbf)
-        self.wd = pi.set_watchdog(gpio, 10)
+        if self.auto_modulated:
+            self.cb = pi.callback(gpio, pigpio.EITHER_EDGE, self.cbf)
+        else:
+            self.cb = pi.callback(gpio, pigpio.RISING_EDGE, self.cbf)
+        self.wd = pi.set_watchdog(gpio, 0)
 
     def reset(self):
         self.code = 1
         self.bits = 1
         self.state = STATE_MID1
-        self.last_fe = 0
+        self.last_re = None
         self.first_re = None
 
     def change_state(self, e):
@@ -62,7 +69,7 @@ class RC5_read:
                 self.code = (self.code << 1) + 1
                 self.bits += 1
 
-    def decodeP(self, l, td):
+    def decode_segment(self, l, td):
         if td >= MIN_SHORT and td <= MAX_SHORT:
             if l:
                 self.change_state(SHORT_PULSE)
@@ -74,35 +81,46 @@ class RC5_read:
             else:
                 self.change_state(LONG_SPACE)
         elif td > MAX_LONG:
-            print('reset')
             self.reset()
 
     def cbf(self, g, l, t):
-        # save last falling edge
-        if not l:
-            self.last_fe = t
-            return
+        if self.invert_logic:
+            l = not l
+        if self.auto_modulated:
+            # save the first rising edge this segment
+            if l == 1:
+                if self.last_fe:
+                    self.decode_segment(0, pigpio.tickDiff(self.last_fe, t))
+                    self.last_fe = None
+                self.last_re = t
 
-        # save the first rising edge this segment
-        if l == 1 and not self.first_re:
-            self.first_re = t
-            return
+            if l == 0 and self.last_re:
+                self.decode_segment(1, pigpio.tickDiff(self.last_re, t))
+                self.last_fe = t
+                self.last_re = None
+        else:
+            # save the first rising edge this segment
+            if l == 1 and not self.first_re:
+                self.first_re = t
+                self.last_re = t
+                return
 
-        # check if we're pulsing
-        if pigpio.tickDiff(self.last_fe, t) < 50:
-            return
+            # pulsing
+            if l == 1 and pigpio.tickDiff(self.last_re, t) < 50:
+                self.last_re = t
+                return
 
-        # decode the last 2 segments
-        if self.first_re and self.last_fe:
-            self.decodeP(1, pigpio.tickDiff(self.first_re, self.last_fe))
-        if not l == 2:
-            self.decodeP(0, pigpio.tickDiff(self.last_fe, t))
-            self.first_re = t
+            if self.first_re and self.last_re:
+                self.decode_segment(1, pigpio.tickDiff(self.first_re, self.last_re))
+
+                if not l == 2:
+                    self.decode_segment(0, pigpio.tickDiff(self.last_re, t))
+                    self.first_re = t
+                    self.last_re = t
 
         # got a full send
-        if self.bits >= 14:
-            code = (self.code >> (self.bits - 14))
-            print(hex(code & COMMAND_MASK))
+        if self.bits == 14:
+            print(hex(self.code & COMMAND_MASK))
             self.reset()
 
 def main():
