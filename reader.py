@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import pigpio, time
+import pigpio, sys, time
 
 MIN_SHORT = 789
 MAX_SHORT = 989
@@ -18,13 +18,9 @@ STATE_START0 = 3
 
 TRANS_TABLE = [0x01, 0x91, 0x9b, 0xfb]
 
-S2_MASK = 0x1000
-S2_SHIFT = 12
-TOGGLE_MASK = 0x0800
-TOGGLE_SHIFT = 11
-ADDRESS_MASK = 0x7c0
-ADDRESS_SHIFT = 6
-COMMAND_MASK = 0x003f
+ADDRESS_MASK = 0xf
+ADDRESS_SHIFT = 8
+COMMAND_MASK = 0xff
 COMMAND_SHIFT = 0
 
 class RC5_read:
@@ -47,7 +43,10 @@ class RC5_read:
             self.cb = pi.callback(gpio, pigpio.EITHER_EDGE, self.cbf)
         else:
             self.cb = pi.callback(gpio, pigpio.RISING_EDGE, self.cbf)
-        self.wd = pi.set_watchdog(gpio, 0)
+        if self.invert_logic:
+            self.wd = pi.set_watchdog(gpio, 0)
+        else:
+            self.wd = pi.set_watchdog(gpio, 10)
 
     def reset(self):
         self.code = 1
@@ -112,15 +111,15 @@ class RC5_read:
 
             if self.first_re and self.last_re:
                 self.decode_segment(1, pigpio.tickDiff(self.first_re, self.last_re))
-
-                if not l == 2:
+                if not l == 2 and self.last_re:
                     self.decode_segment(0, pigpio.tickDiff(self.last_re, t))
                     self.first_re = t
                     self.last_re = t
 
         # got a full send
         if self.bits == 14:
-            print(hex(self.code & COMMAND_MASK))
+            sys.stdout.write(chr(self.code & COMMAND_MASK))
+            sys.stdout.flush()
             self.reset()
 
 def main():

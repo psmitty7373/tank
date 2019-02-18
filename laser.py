@@ -15,7 +15,6 @@ def carrier(gpio, frequency, micros, dutycycle=0.25):
         sofar += on
         off = target - sofar
         sofar += off
-        print(off)
         wf.append(pigpio.pulse(1 << gpio, 0, on))
         wf.append(pigpio.pulse(0, 1 << gpio, off))
     return wf
@@ -24,30 +23,21 @@ class RC5:
     def __init__(self, pi, gpio, address=0):
         self.pi = pi
         self.gpio = gpio
-        self.address = address & 31
-        self.toggle = 0
+        self.address = address & 15
         self.bip = bip(pi, gpio, 37900, 889, 889, True)
 
     def set_address(self, address):
-        self.address = address & 31
+        self.address = address & 15
 
-    def send_raw(self, data, bits, repeats=1):
-        print(bin(data), bits, repeats)
+    def send_raw(self, data, bits):
         chain = self.bip.format(data, bits)
-        print(chain)
-        for i in range(repeats):
-            self.pi.wave_chain(chain)
-            time.sleep(0.1)
+        self.pi.wave_chain(chain)
 
-    def send(self, command, repeats=1):
-        command &= 63
-        if self.toggle:
-            self.toggle = 0
-        else:
-            self.toggle = 1
+    def send(self, command):
+        command &= 255
 
-        data = (3<<12) | (self.toggle<<11) | (self.address<<6) | command
-        self.send_raw(data, 14, repeats)
+        data = (3<<12) | (self.address << 8) | command
+        self.send_raw(data, 14)
 
     def cancel(self):
         self.bip.cancel()
@@ -94,9 +84,13 @@ def main():
     pi = pigpio.pi()
     pi.wave_clear()
     sender = RC5(pi, 2)
-    sender.set_address(1)
-    for i in range (1, 0x3f):
-        sender.send(i, 1)
+    sender.set_address(5)
+
+    msg = "Never gonna give you up, never gonna let you down!\n"
+    while 1:
+        for i in msg:
+            sender.send(ord(i))
+            time.sleep(0.04)
     return 1
 
 if __name__ == "__main__":
