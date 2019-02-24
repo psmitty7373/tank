@@ -123,7 +123,7 @@ class RC5_read:
             self.reset()
 
 def main():
-     pi = pigpio.pi()
+     pi = pigpio.pi('localhost', 9999)
      r = RC5_read(pi, 3)
 
      while True:

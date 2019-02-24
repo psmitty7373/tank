@@ -49,10 +49,11 @@ left_pwm = 17
 left_s1 = 9 
 left_s2 = 11
 
-serial_port_enabled = True
+serial_port_enabled = False
 serial_port_mode = "UWB"
 serial_port_baud = 115200
 serial_port = "/dev/serial0"
+imu_enabled = False
 
 class Tank(multiprocessing.Process):
     def __init__(self, tasks, results):
@@ -72,11 +73,14 @@ class Tank(multiprocessing.Process):
             self.s1 = None
 
         #init imu
-        self.bno = BNO055.BNO055()
-        if self.bno.begin() is not True:
-            print("Error initializing device")
-            return False
-        self.bno.setExternalCrystalUse(True)
+        if imu_enabled:
+            self.bno = BNO055.BNO055()
+            if self.bno.begin() is not True:
+                print("Error initializing device")
+                return False
+            self.bno.setExternalCrystalUse(True)
+        else:
+            self.bno = None
 
         #right
         self.pi.set_mode(right_pwm, pigpio.OUTPUT)
@@ -133,6 +137,8 @@ class Tank(multiprocessing.Process):
         self.running = False
 
     def update_uwb(self):
+        if not serial_port_enabled or not serial_port_mode == "UWB":
+            return
         rlv_type = 0
         rlv_payload = b""
         num_bytes, rx_bytes = self.pi.serial_read(self.s1, 2)
@@ -170,20 +176,20 @@ class Tank(multiprocessing.Process):
             for i in range(0, num_distances):
                 uwb_addr, distance, quality, pos_x, pos_y, pos_z, pos_quality = struct.unpack('<Hlblllb', pkt['rlv_payload'][1 + i * 20: 1 + (i+1) * 20])
                 self.pf.addRangeMeasurement(uwb_addr, [pos_x/1000.0, pos_y/1000.0, pos_z/1000.0], distance/1000.0, 0.3)
-#        else:
-#            print("Got:", pkt)
 
     def run(self):
         print("Running!")
         while self.running:
             curr_time = time.time() * 1000
 
-            self.update_uwb()
-
             # if no update in a second, stop motors
             if curr_time - self.failsafe_time > 1000:
                 self.pi.set_servo_pulsewidth(left_pwm, 0)
                 self.pi.set_servo_pulsewidth(right_pwm, 0)
+
+            # UWB
+            # poll uwb serial port
+            self.update_uwb()
 
             # position info ready
             if self.pos_ready:
@@ -192,7 +198,8 @@ class Tank(multiprocessing.Process):
 #                self.pi.serial_write(self.s1, '\x0c\x00') #get measurements
                 #self.pf.update()
                 self.ppos_x, self.ppos_y, self.ppos_z = self.pf.getEstimate()
-                self.azim_x, self.azim_y, self.azim_z = self.bno.getVector(BNO055.BNO055.VECTOR_EULER)
+                if self.imu_enabled and self.bno:
+                    self.azim_x, self.azim_y, self.azim_z = self.bno.getVector(BNO055.BNO055.VECTOR_EULER)
 
 
             while not self.tasks.empty():
@@ -308,7 +315,7 @@ class Tank(multiprocessing.Process):
                 #semd status back
                 if not self.results.full() and time.time() * 1000 - self.heartbeat_time > 200:
                     self.heartbeat_time = time.time() * 1000
-                    self.results.put({ 'current': self.current, 'volts': self.volts, 'x': median(self.posm_x)/10.0, 'y': median(self.posm_y)/10.0, 'z': median(self.posm_z)/10.0, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
+                    #self.results.put({ 'current': self.current, 'volts': self.volts, 'x': median(self.posm_x)/10.0, 'y': median(self.posm_y)/10.0, 'z': median(self.posm_z)/10.0, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
             time.sleep(0.05)
 
         print("Shutting down...")

@@ -43,13 +43,14 @@ body {
     top: 0px;
 }
 #heading {
-    width: 50px;
-    height: 25px;
-    line-height: 25px;
+    width: 100px;
+    height: 50px;
+    line-height: 50px;
     background-color: green;
     top: 0px;
     display: table;
     margin: 0 auto;
+    font-size: 30px;
     font-family: ocr-a-std;
 }
 #interface {
@@ -64,6 +65,14 @@ body {
     top: 0px;
     width: 300px;
     height: 300px;
+}
+#opencv {
+    z-index: 7;
+    position: absolute;
+    right: 0px;
+    top: 0px;
+    width: 400px;
+    height: 400px;
 }
 #remoteVideo {
 	z-index: 1;

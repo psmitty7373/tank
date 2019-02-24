@@ -81,7 +81,7 @@ class bip:
             self.w_space = None
 
 def main():
-    pi = pigpio.pi()
+    pi = pigpio.pi('localhost', 9999)
     pi.wave_clear()
     sender = RC5(pi, 2)
     sender.set_address(5)
