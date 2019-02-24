@@ -238,7 +238,11 @@ joystick.addEventListener('touchEnd', function(){
 
 function sendJoystick(j) {
     if (ws.readyState == 1) {
-        pos = {x:Math.round(j.deltaX()), y: Math.round(-j.deltaY())};
+        pos = { x: j.deltaX(), y: -j.deltaY() };
+        pos.x = pos.x / 100;
+        pos.y = pos.y / 100;
+        x = Math.round(0.5 * Math.sqrt(2 + Math.pow(pos.x, 2) - Math.pow(pos.y, 2) + 2 * pos.x * Math.sqrt(2)) - 0.5 * Math.sqrt(2 + Math.pow(pos.x, 2) - Math.pow(pos.y, 2) - 2 * pos.x * Math.sqrt(2)));
+        y = Math.round(0.5 * Math.sqrt(2 - Math.pow(pos.x, 2) + Math.pow(pos.y, 2) + 2 * pos.y * Math.sqrt(2)) - 0.5 * Math.sqrt(2 - Math.pow(pos.x, 2) + Math.pow(pos.y, 2) - 2 * pos.y * Math.sqrt(2)));
         ws.send(JSON.stringify(pos));
     }
 }
