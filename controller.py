@@ -7,42 +7,8 @@ import tornado.ioloop
 import tornado.web as web
 import tornado.websocket
 
-def translate(value, leftMin, leftMax, rightMin, rightMax):
-    leftSpan = leftMax - leftMin
-    rightSpan = rightMax - rightMin
-    valueScaled = float(value - leftMin) / float(leftSpan)
-    return rightMin + (valueScaled * rightSpan)
-
-def steering(x, y, minJoystick, maxJoystick, minSpeed, maxSpeed):
-    if x == 0 and y == 0:
-        return (0, 0)
-
-    z = math.sqrt(x * x + y * y)
-    rad = math.acos(math.fabs(x) / z)
-    angle = rad * 180 / math.pi
-    tcoeff = -1 + (angle / 90) * 2
-    turn = tcoeff * math.fabs(math.fabs(y) - math.fabs(x))
-    turn = round(turn * 100, 0) / 100
-    mov = max(math.fabs(y), math.fabs(x))
-
-    if (x >= 0 and y >= 0) or (x < 0 and y < 0):
-        rawLeft = mov
-        rawRight = turn
-    else:
-        rawRight = mov
-        rawLeft = turn
-
-    if y < 0:
-        rawLeft = 0 - rawLeft
-        rawRight = 0 - rawRight
-
-    rightOut = translate(rawRight, minJoystick, maxJoystick, minSpeed, maxSpeed)
-    leftOut = translate(rawLeft, minJoystick, maxJoystick, minSpeed, maxSpeed)
-
-    return (round(rightOut), round(leftOut))
-
-right_pwm_f = 27
-right_pwm_r = 17
+right_pwm_f = 17
+right_pwm_r = 27
 
 left_pwm_f = 23
 left_pwm_r = 24
@@ -51,12 +17,62 @@ serial_port_enabled = False
 serial_port_mode = "UWB"
 serial_port_baud = 115200
 serial_port = "/dev/serial0"
-imu_enabled = False
+imu_enabled = True
+
+def translate(value, leftMin, leftMax, rightMin, rightMax):
+    leftSpan = leftMax - leftMin
+    rightSpan = rightMax - rightMin
+    valueScaled = float(value - leftMin) / float(leftSpan)
+    return rightMin + (valueScaled * rightSpan)
+
+def steering(x, y):
+    my = math.copysign(max(math.fabs(y), math.fabs(x)), y)
+
+    turn = False
+    if abs(y) < 0.15:
+        turn = True
+
+    if y >= 0:
+        if x >= 0:
+            l = my
+            r = y - x
+        else:
+            l = y + x
+            r = my
+    else:
+        if x >= 0:
+            l = y + x
+            r = my
+        else:
+            l = my
+            r = y - x
+
+    # limit turn speed
+    if turn:
+        if abs(r) > 0.3:
+            r = math.copysign(0.3, r)
+        if abs(l) > 0.3:
+            l = math.copysign(0.3, l)
+    # straight
+    else:
+        if y > 0: #forward
+            if r - l > 0.5 and r > 0.6:
+                l = r - 0.5
+            elif l - r > 0.5 and l > 0.6:
+                r = l - 0.5
+        else: #backwards
+            pass
+
+    # translate to pwm
+    r = translate(r, -1, 1, -255, 255)
+    l = translate(l, -1, 1, -255, 255)
+    return (round(r), round(l))
 
 class Tank(multiprocessing.Process):
     def __init__(self, tasks, results):
+        import laser
         super(Tank, self).__init__()
-
+        
         self.running = True
 
         # init signal handler
@@ -64,6 +80,10 @@ class Tank(multiprocessing.Process):
 
         #init pigpio
         self.pi = pigpio.pi('localhost', 9999)
+
+        #init weapon
+        self.weapon = laser.laser(self.pi, 25)
+        self.weapon_ready = True
 
         if serial_port_enabled:
             self.s1 = self.pi.serial_open(serial_port, serial_port_baud)
@@ -101,6 +121,7 @@ class Tank(multiprocessing.Process):
         self.brake_time = 100
         self.failsafe_time = time.time() * 1000
         self.heartbeat_time = time.time() * 1000
+        self.weapon_reload_time = 0
 
         # position
         self.pos_ready = False
@@ -181,6 +202,11 @@ class Tank(multiprocessing.Process):
                 self.pi.set_PWM_dutycycle(right_pwm_f, 0)
                 self.pi.set_PWM_dutycycle(right_pwm_r, 0)
 
+            # update reload timer
+            if not self.weapon_ready:
+                if curr_time - self.weapon_reload_time > 5000:
+                    self.weapon_ready = True
+
             # UWB
             # poll uwb serial port
             self.update_uwb()
@@ -192,14 +218,20 @@ class Tank(multiprocessing.Process):
 #                self.pi.serial_write(self.s1, '\x0c\x00') #get measurements
                 #self.pf.update()
                 self.ppos_x, self.ppos_y, self.ppos_z = self.pf.getEstimate()
-                if self.imu_enabled and self.bno:
-                    self.azim_x, self.azim_y, self.azim_z = self.bno.getVector(BNO055.BNO055.VECTOR_EULER)
+
+            # poll imu
+            if imu_enabled and self.bno:
+                self.azim_x, self.azim_y, self.azim_z = self.bno.getVector(BNO055.BNO055.VECTOR_EULER)
 
             while not self.tasks.empty():
                 self.failsafe_time = curr_time
                 task = self.tasks.get()
                 if task['task_type'] == "throttle_update":
                     r, l = task['payload']
+                elif task['task_type'] == "fire_weapon":
+                    self.weapon_reload_time = curr_time
+                    self.weapon_ready = False
+                    self.weapon.send(7)
                 elif task['task_type'] == "shutdown":
                     self.running = False
 
@@ -271,6 +303,7 @@ class Tank(multiprocessing.Process):
                     elif self.left_braking:
                         self.left_braking = False
 
+                #left motor speed
                 if l == 0 or self.left_braking:
                     self.pi.set_PWM_dutycycle(left_pwm_f, 0)
                     self.pi.set_PWM_dutycycle(left_pwm_r, 0)
@@ -282,6 +315,7 @@ class Tank(multiprocessing.Process):
                         self.pi.set_PWM_dutycycle(left_pwm_f, 0)
                         self.pi.set_PWM_dutycycle(left_pwm_r, abs(l))
 
+                #right motor speed
                 if r == 0 or self.right_braking:
                     self.pi.set_PWM_dutycycle(right_pwm_f, 0)
                     self.pi.set_PWM_dutycycle(right_pwm_r, 0)
@@ -296,7 +330,7 @@ class Tank(multiprocessing.Process):
                 #semd status back
                 if not self.results.full() and time.time() * 1000 - self.heartbeat_time > 200:
                     self.heartbeat_time = time.time() * 1000
-                    #self.results.put({ 'current': self.current, 'volts': self.volts, 'x': median(self.posm_x)/10.0, 'y': median(self.posm_y)/10.0, 'z': median(self.posm_z)/10.0, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
+                    self.results.put({ 'current': self.current, 'volts': self.volts, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
             time.sleep(0.05)
 
         print("Shutting down...")
@@ -323,10 +357,13 @@ class WebSocket(tornado.websocket.WebSocketHandler):
     def open(self):
         self.connections.add(self)
  
-    def on_message(self, message):
-        pos = json.loads(message)
-        r, l = steering(pos['x'], pos['y'], -100, 100, -255, 255)
-        self.tasks.put({'task_type': 'throttle_update', 'payload': (r,l)})
+    def on_message(self, msg):
+        msg = json.loads(msg)
+        if msg['t'] == 't':
+            r, l = steering(msg['x'], msg['y'])
+            self.tasks.put({'task_type': 'throttle_update', 'payload': (r,l)})
+        elif msg['t'] == 'f':
+            self.tasks.put({'task_type': 'fire_weapon'})
         while not self.results.empty():
             msg = self.results.get()
             [client.write_message(json.dumps(msg)) for client in self.connections]

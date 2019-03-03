@@ -80,18 +80,13 @@ class bip:
             self.pi.wave_delete(self.w_space)
             self.w_space = None
 
-def main():
-    pi = pigpio.pi('localhost', 9999)
-    pi.wave_clear()
-    sender = RC5(pi, 2)
-    sender.set_address(5)
+class laser:
+    def __init__(self, pi, gpio):
+        self.pi = pi
+        self.pi.wave_clear()
+        self.sender = RC5(pi, gpio)
+        self.sender.set_address(5)
 
-    msg = "Never gonna give you up, never gonna let you down!\n"
-    while 1:
-        for i in msg:
-            sender.send(ord(i))
-            time.sleep(0.04)
-    return 1
-
-if __name__ == "__main__":
-     main()
+    def send(self, value):
+        self.sender.send(value)
+        return 1

@@ -19,58 +19,102 @@ let start_time = 0;
 let video = document.getElementById('remoteVideo');
 let reticle_color = "green";
 
+
+function get_topdown_quad(points, src) {
+    let dest = new cv.Mat();
+    let corner1 = new cv.Point(points.data32S[0], points.data32S[1]);
+    let corner2 = new cv.Point(points.data32S[2], points.data32S[3]);
+    let corner3 = new cv.Point(points.data32S[4], points.data32S[5]);
+    let corner4 = new cv.Point(points.data32S[6], points.data32S[7]);
+
+    let corners = [{ corner: corner1 }, { corner: corner2 }, { corner: corner3 }, { corner: corner4 }];
+    corners.sort((item1, item2) => { return (item1.corner.y < item2.corner.y) ? -1 : (item1.corner.y > item2.corner.y) ? 1 : 0; }).slice(0, 5);
+
+    let tl = corners[0].corner.x < corners[1].corner.x ? corners[0] : corners[1];
+    let tr = corners[0].corner.x > corners[1].corner.x ? corners[0] : corners[1];
+    let bl = corners[2].corner.x < corners[3].corner.x ? corners[2] : corners[3];
+    let br = corners[2].corner.x > corners[3].corner.x ? corners[2] : corners[3];
+
+    let widthBottom = Math.hypot(br.corner.x - bl.corner.x, br.corner.y - bl.corner.y);
+    let widthTop = Math.hypot(tr.corner.x - tl.corner.x, tr.corner.y - tl.corner.y);
+    let theWidth = (widthBottom > widthTop) ? widthBottom : widthTop;
+    let heightRight = Math.hypot(tr.corner.x - br.corner.x, tr.corner.y - br.corner.y);
+    let heightLeft = Math.hypot(tl.corner.x - bl.corner.x, tr.corner.y - bl.corner.y);
+    let theHeight = (heightRight > heightLeft) ? heightRight : heightLeft;
+
+    let dest_coords = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, theWidth - 1, 0, theWidth - 1, theHeight - 1, 0, theHeight - 1]);
+    let src_coords = cv.matFromArray(4, 1, cv.CV_32FC2, [tl.corner.x, tl.corner.y, tr.corner.x, tr.corner.y, br.corner.x, br.corner.y, bl.corner.x, bl.corner.y]);
+    let dsize = new cv.Size(theWidth, theHeight);
+    let M = cv.getPerspectiveTransform(src_coords, dest_coords)
+    cv.warpPerspective(src, dest, M, dsize, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+    let r = new cv.Rect();
+    let px = dest.ucharPtr(5,5);
+    let glyph = new Array(25).fill(0);
+    if (px[0] < 128 && px[1] < 128 && px[2] < 128) {
+        let rect = new cv.Rect();
+        for (let y = 0; y < 5; y++) {
+            for (let x = 0; x < 5; x++) {
+                let block = new cv.Mat();
+                rect.x = x * Math.floor(dest.cols / 5);
+                rect.width = Math.floor(dest.cols / 5);
+                rect.y = y * Math.floor(dest.rows / 5);
+                rect.height = Math.floor(dest.rows / 5);
+                block = dest.roi(rect);
+                let mean = cv.mean(block);
+                let color = new cv.Scalar(255, 30, 30, 255);
+                if (mean[0] < 128 && mean[1] < 128 && mean[2] < 128) {
+                    glyph[(y * 5) + x] = 1;
+                    color[0] = 30;
+                    color[1] = 255;
+                }
+                cv.rectangle(dest, new cv.Point(rect.x, rect.y), new cv.Point(rect.x + rect.width, rect.y + rect.height), color, 1)
+                block.delete();
+            }
+        }
+    }
+    if (glyph.toString() == "1,1,1,1,1,1,1,0,1,1,1,0,1,1,1,1,1,0,0,1,1,1,1,1,1")
+        cv.imshow('opencv', dest);
+    dest.delete();
+}
+
 cv['onRuntimeInitialized']=()=>{
     video.width = video.offsetWidth;
     video.height = video.offsetHeight;
     let cap = new cv.VideoCapture(video);
-    let greenLower = new cv.Scalar(29, 86, 6);
-    let greenUpper = new cv.Scalar(64, 255, 255);
+
+    let src = new cv.Mat(video.height, video.width, cv.CV_8UC4);
+    let sm = new cv.Mat();
+    let gray = new cv.Mat();
+    let edges = new cv.Mat();
+    let contours = new cv.MatVector();
+    let hierarchy = new cv.Mat();
+    let color = new cv.Scalar(255, 30, 30, 255);
+    let ksize = new cv.Size(5,5);
 
     function processFrame() {
-
-        let src = new cv.Mat(video.height, video.width, cv.CV_8UC4);
-        let dst = new cv.Mat();
-        let mask = new cv.Mat();
-        let contours = new cv.MatVector();
-        let hierarchy = new cv.Mat();
         cap.read(src);
+        cv.resize(src, sm, new cv.Size(1024, 768), 0, 0, cv.INTER_AREA);
+        cv.cvtColor(sm, gray, cv.COLOR_BGR2GRAY);
+        cv.GaussianBlur(gray, gray, ksize, 0, 0, cv.BORDER_DEFAULT);
+        cv.Canny(gray, edges, 100, 200, 3, true);
+        cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+//        cv.drawContours(sm, contours, -1, color, 1, cv.LINE_8, hierarchy, 100);
 
-        cv.resize(src, src, new cv.Size(300, 300), 0, 0, cv.INTER_AREA);
-
-        let ksize = new cv.Size(7,7);
-        cv.GaussianBlur(src, dst, ksize, 0, 0, cv.BORDER_DEFAULT);
-        cv.cvtColor(dst, dst, cv.COLOR_BGR2HSV);
-
-        let low = new cv.Mat(dst.rows, dst.cols, dst.type(), greenLower);
-        let high = new cv.Mat(dst.rows, dst.cols, dst.type(), greenUpper);
-
-        cv.inRange(dst, low, high, mask);
-        cv.erode(mask, mask, new cv.Mat(), new cv.Point(-1, -1), 3);
-        cv.dilate(mask, mask, new cv.Mat(), new cv.Point(-1, -1), 3);
-
-        cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-        let color = new cv.Scalar(255, 30, 30, 255);
-        cv.drawContours(src, contours, -1, color, 1, cv.LINE_8, hierarchy, 100);
-        for (let i = 0; i < contours.size(); ++i) {
+        for (let i = 0; i < contours.size(); i++) {
             let cnt = contours.get(i);
-            let br = cv.boundingRect(cnt);
-            cv.rectangle(src, new cv.Point(br.x, br.y), new cv.Point(br.x + br.width, br.y + br.height), color, 1);
-            if (br.x < video.width / 2 && (br.x + br.width) > video.width / 2 && br.y < video.height / 2 && (br.y + br.height) > video.height/2)
-                reticle_color = "red";
-            else
-                reticle_color = "green";
+            let approx = new cv.Mat();
+            let perimeter = cv.arcLength(cnt, false);
+            cv.approxPolyDP(cnt, approx, 0.05 * perimeter, true);
+            if (approx.rows == 4) {
+                get_topdown_quad(approx, sm);
+            }
+
+            approx.delete();
+//            cv.rectangle(src, new cv.Point(br.x, br.y), new cv.Point(br.x + br.width, br.y + br.height), color, 1);
         }
 
-        cv.imshow('opencv', src);
-        low.delete();
-        high.delete();
-        src.delete();
-        dst.delete();
-        mask.delete();
-        contours.delete();
-        hierarchy.delete();
 
+    //    cv.imshow('opencv', src);
         setTimeout(processFrame, 100);
     }
     setTimeout(processFrame, 0);
@@ -211,8 +255,12 @@ function connect() {
         // heading
         if (!msg.a_x)
             document.getElementById("heading").innerHTML = '000';
-        else
-            document.getElementById("heading").innerHTML = Math.round(msg.a_x).toString(10).padStart(3,'0');
+        else {
+            let azim = Math.round(msg.a_x);
+            if (azim == 360)
+                azim = 0;
+            document.getElementById("heading").innerHTML = azim.toString(10).padStart(3,'0');
+        }
         
         // update position log
         pos_log.unshift({x: msg.x, y: msg.y});
@@ -243,8 +291,23 @@ function sendJoystick(j) {
         pos.y = pos.y / 100;
         x = Math.round(0.5 * Math.sqrt(2 + Math.pow(pos.x, 2) - Math.pow(pos.y, 2) + 2 * pos.x * Math.sqrt(2)) - 0.5 * Math.sqrt(2 + Math.pow(pos.x, 2) - Math.pow(pos.y, 2) - 2 * pos.x * Math.sqrt(2)));
         y = Math.round(0.5 * Math.sqrt(2 - Math.pow(pos.x, 2) + Math.pow(pos.y, 2) + 2 * pos.y * Math.sqrt(2)) - 0.5 * Math.sqrt(2 - Math.pow(pos.x, 2) + Math.pow(pos.y, 2) - 2 * pos.y * Math.sqrt(2)));
+        pos.t = 't';
         ws.send(JSON.stringify(pos));
     }
+}
+
+function fireWeaponWrapper() {
+    fireWeapon(10);
+}
+
+function fireWeapon(times) {
+    if (ws.readyState == 1) {
+        msg = { t: 'f' };
+        ws.send(JSON.stringify(msg));
+    }
+    times--;
+    if (times > 0)
+        setTimeout(function() { fireWeapon(times); }, 50);
 }
 
 setInterval(function() {
