@@ -13,6 +13,8 @@ right_pwm_r = 27
 left_pwm_f = 23
 left_pwm_r = 24
 
+min_throttle = 50.0
+
 serial_port_enabled = False
 serial_port_mode = "UWB"
 serial_port_baud = 115200
@@ -25,47 +27,42 @@ def translate(value, leftMin, leftMax, rightMin, rightMax):
     valueScaled = float(value - leftMin) / float(leftSpan)
     return rightMin + (valueScaled * rightSpan)
 
-def steering(x, y):
-    my = math.copysign(max(math.fabs(y), math.fabs(x)), y)
+def steering2(x, y):
+    if y >= 0: # forward
+        if x >= 0: # right
+            premix_l = 1.0
+            premix_r = 1.0 - 1.5 * x
+        else: # left
+            premix_l = 1.0 + 1.5 * x
+            premix_r = 1.0
+    else: # backward
+        if x >= 0: # right
+            premix_l = 1.0 - x
+            premix_r = 1.0
+        else: # left
+            premix_l = 1.0
+            premix_r = 1.0 + x
 
-    turn = False
-    if abs(y) < 0.15:
-        turn = True
+    premix_l = premix_l * y
+    premix_r = premix_r * y
 
-    if y >= 0:
-        if x >= 0:
-            l = my
-            r = y - x
-        else:
-            l = y + x
-            r = my
+    piv_speed = 0.15 * x
+    if abs(y) > 0.3:
+        piv_scale = 0.0
     else:
-        if x >= 0:
-            l = y + x
-            r = my
-        else:
-            l = my
-            r = y - x
+        piv_scale = 1.0 - abs(y) / 0.3
 
-    # limit turn speed
-    if turn:
-        if abs(r) > 0.3:
-            r = math.copysign(0.3, r)
-        if abs(l) > 0.3:
-            l = math.copysign(0.3, l)
-    # straight
-    else:
-        if y > 0: #forward
-            if r - l > 0.5 and r > 0.6:
-                l = r - 0.5
-            elif l - r > 0.5 and l > 0.6:
-                r = l - 0.5
-        else: #backwards
-            pass
+    l = (1.0 - piv_scale) * premix_l + piv_scale * piv_speed
+    r = (1.0 - piv_scale) * premix_r + piv_scale * -piv_speed
+
 
     # translate to pwm
     r = translate(r, -1, 1, -255, 255)
     l = translate(l, -1, 1, -255, 255)
+    if abs(r) > 0:
+        r = math.copysign(translate(abs(r), 0, 255, min_throttle, 255), r)
+    if abs(l) > 0:
+        l = math.copysign(translate(abs(l), 0, 255, min_throttle, 255), l)
     return (round(r), round(l))
 
 class Tank(multiprocessing.Process):
@@ -231,7 +228,7 @@ class Tank(multiprocessing.Process):
                 elif task['task_type'] == "fire_weapon":
                     self.weapon_reload_time = curr_time
                     self.weapon_ready = False
-                    self.weapon.send(7)
+                    self.weapon.send(ord('A'))
                 elif task['task_type'] == "shutdown":
                     self.running = False
 
@@ -331,7 +328,7 @@ class Tank(multiprocessing.Process):
                 if not self.results.full() and time.time() * 1000 - self.heartbeat_time > 200:
                     self.heartbeat_time = time.time() * 1000
                     self.results.put({ 'current': self.current, 'volts': self.volts, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
-            time.sleep(0.05)
+            time.sleep(0.01)
 
         print("Shutting down...")
         self.pi.serial_close(self.s1)
@@ -360,7 +357,7 @@ class WebSocket(tornado.websocket.WebSocketHandler):
     def on_message(self, msg):
         msg = json.loads(msg)
         if msg['t'] == 't':
-            r, l = steering(msg['x'], msg['y'])
+            r, l = steering2(msg['x'], msg['y'])
             self.tasks.put({'task_type': 'throttle_update', 'payload': (r,l)})
         elif msg['t'] == 'f':
             self.tasks.put({'task_type': 'fire_weapon'})

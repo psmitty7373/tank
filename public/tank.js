@@ -18,6 +18,7 @@ let last_time = 0;
 let start_time = 0;
 let video = document.getElementById('remoteVideo');
 let reticle_color = "green";
+let weapon_ready = true;
 
 
 function get_topdown_quad(points, src) {
@@ -297,7 +298,10 @@ function sendJoystick(j) {
 }
 
 function fireWeaponWrapper() {
-    fireWeapon(10);
+    if (weapon_ready) {
+        weapon_ready = false;
+        fireWeapon(10);
+    }
 }
 
 function fireWeapon(times) {
@@ -308,11 +312,13 @@ function fireWeapon(times) {
     times--;
     if (times > 0)
         setTimeout(function() { fireWeapon(times); }, 50);
+    else
+        weapon_ready = true;
 }
 
 setInterval(function() {
     sendJoystick(joystick);
-}, 100);
+}, 50);
 
 function toggleFullScreen() {
     var doc = window.document;
@@ -352,6 +358,12 @@ var websocketSignalingChannel = new WebSocketSignalingChannel(document.getElemen
     canvas.width  = canvas.offsetWidth;
     canvas.height = canvas.offsetHeight;
 
-
     requestAnimationFrame(draw);
+
+    document.addEventListener('keydown', function(event) {
+        console.log(event.keyCode);
+        if(event.keyCode == 32) {
+            fireWeaponWrapper();
+        }
+    });
 })();
