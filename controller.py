@@ -325,15 +325,15 @@ class Tank(multiprocessing.Process):
                     else:
                         self.pi.set_PWM_dutycycle(right_pwm_f, 0)
                         self.pi.set_PWM_dutycycle(right_pwm_r, abs(self.r_t))
-
-                #semd status back
-                if not self.results.full() and time.time() * 1000 - self.heartbeat_time > 200:
-                    self.heartbeat_time = time.time() * 1000
-                    self.results.put({ 'current': self.current, 'volts': self.volts, 'l_t': self.l_t, 'r_t': self.r_t, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
+            #send current status
+            if not self.results.full() and time.time() * 1000 - self.heartbeat_time > 100:
+                self.heartbeat_time = time.time() * 1000
+                self.results.put({ 'current': self.current, 'volts': self.volts, 'l_t': self.l_t, 'r_t': self.r_t, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
             time.sleep(0.01)
 
         print("Shutting down...")
-        self.pi.serial_close(self.s1)
+        if serial_port_enabled:
+            self.pi.serial_close(self.s1)
 
 
 public = os.path.join(os.path.dirname(__file__), 'public')
@@ -379,7 +379,8 @@ def make_app(tasks, results):
 
 def signal_handler(signal, frame):
     print("Stopping Tornado.")
-    tornado.ioloop.IOLoop.current().stop()
+    ioloop = tornado.ioloop.IOLoop.instance()
+    ioloop.add_callback(ioloop.stop)
 
 def main():
     tasks = multiprocessing.JoinableQueue()

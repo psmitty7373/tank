@@ -19,7 +19,10 @@ body {
     height: 100%;
     border: none;
     position: absolute;
-    z-index: 20;
+}
+.gauge-label {
+    font-size: 10px;
+    font-family: ocr-a-std;
 }
 #steering-button {
 	background: url("images/steering.png") no-repeat scroll 0 0 transparent;
@@ -48,6 +51,7 @@ body {
     position: absolute;
     left: 0px;
     top: 0px;
+    opacity: 0.5;
 }
 #heading {
     width: 100px;
@@ -55,8 +59,11 @@ body {
     line-height: 50px;
     background-color: green;
     top: 0px;
+    left: 0px;
+    right: 0px;
+    position: absolute;
     display: table;
-    margin: 0 auto;
+    margin: auto;
     font-size: 30px;
     font-family: ocr-a-std;
 }
@@ -66,13 +73,11 @@ body {
     pointer-events: none;
 }
 #minimap {
-    z-index: 7;
     position: absolute;
     left: 0px;
     top: 0px;
     width: 300px;
     height: 300px;
-    display: none;
 }
 #opencv {
     z-index: 7;

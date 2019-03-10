@@ -5,6 +5,7 @@ function isPrivateAddress(ipaddress) {
             (parts[0] === '192' && parts[1] === '168');
 };
 
+// GLOBALS
 let anchors = [
         {id: 'a', x: 0, y: 0, z: 0 },
         {id: 'b', x: 0, y: 200, z: 0},
@@ -13,6 +14,8 @@ let anchors = [
 ];
 
 let pos_log = [];
+let joystick = { x: 0, y: 0 };
+let tank_status = { a_x: 0, a_y: 0, a_z: 0 };
 let FPS = 1000/60;
 let CPS = 1000/20;
 let last_frame = 0;
@@ -22,6 +25,7 @@ let time_diff_control = 0;
 let video = document.getElementById('remoteVideo');
 let reticle_color = "green";
 let weapon_ready = true;
+
 // GAUGES
 let lt_gauge = null;
 let rt_gauge = null;
@@ -145,88 +149,142 @@ function draw_reticle() {
     let canvas = document.getElementById("hud_canvas");
     canvas.width = canvas.offsetWidth;
     canvas.height = canvas.offsetHeight;
-    context = canvas.getContext("2d");
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    context.beginPath();
+    ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.beginPath();
     if (reticle_color == "green")
-        context.strokeStyle = "#00FF00";
+        ctx.strokeStyle = "#00FF00";
     else
-        context.strokeStyle = "#FF0000";
-    context.lineWidth = 3;
-    context.arc(canvas.width/2, canvas.height/2, 10, 0, 2 * Math.PI);
-    context.stroke();
+        ctx.strokeStyle = "#FF0000";
+    ctx.lineWidth = 3;
+    ctx.arc(canvas.width/2, canvas.height/2, 10, 0, 2 * Math.PI);
+    ctx.stroke();
     // right line
-    context.beginPath();
-    context.moveTo(canvas.width/2 + 10, canvas.height/2);
-    context.lineTo(canvas.width/2 + 65, canvas.height/2);
-    context.stroke();
+    ctx.beginPath();
+    ctx.moveTo(canvas.width/2 + 10, canvas.height/2);
+    ctx.lineTo(canvas.width/2 + 65, canvas.height/2);
+    ctx.stroke();
     // left line
-    context.beginPath();
-    context.moveTo(canvas.width/2 - 10, canvas.height/2);
-    context.lineTo(canvas.width/2 - 65, canvas.height/2);
-    context.stroke();
+    ctx.beginPath();
+    ctx.moveTo(canvas.width/2 - 10, canvas.height/2);
+    ctx.lineTo(canvas.width/2 - 65, canvas.height/2);
+    ctx.stroke();
     // top
-    context.beginPath();
-    context.moveTo(canvas.width/2, canvas.height/2 + 10);
-    context.lineTo(canvas.width/2, canvas.height/2 + 25);
-    context.stroke();
+    ctx.beginPath();
+    ctx.moveTo(canvas.width/2, canvas.height/2 + 10);
+    ctx.lineTo(canvas.width/2, canvas.height/2 + 25);
+    ctx.stroke();
     // bottom
-    context.beginPath();
-    context.moveTo(canvas.width/2, canvas.height/2 - 10);
-    context.lineTo(canvas.width/2, canvas.height/2 - 25);
-    context.stroke();
+    ctx.beginPath();
+    ctx.moveTo(canvas.width/2, canvas.height/2 - 10);
+    ctx.lineTo(canvas.width/2, canvas.height/2 - 25);
+    ctx.stroke();
+}
+
+function draw_attitude() {
+    let canvas = document.getElementById("attitude");
+    let ctx = canvas.getContext("2d");
+    canvas.width  = canvas.offsetWidth;
+    canvas.height = canvas.offsetWidth;
+
+    let center = get_center();
+    
+    // clear
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // normalize pitch and roll
+    let roll = 0;
+    let pitch = tank_status.a_z
+    if (Math.abs(pitch) < 90)
+        roll = tank_status.a_y;
+    else {
+        if (pitch > 0)
+            pitch = pitch % 90 - 90;
+        else
+            pitch = pitch % 90 + 90;
+        if (tank_status.a_y > 0)
+            roll = 180 - tank_status.a_y;
+        else
+            roll = -180 - tank_status.a_y;
+    }
+
+    // center / pitch / roll
+    ctx.translate(0, pitch);
+    ctx.translate(canvas.width/2, canvas.height/2);
+    ctx.rotate(roll * Math.PI / 180);
+
+    // draw sky / ground
+    ctx.fillStyle = "rgba(121, 85, 72, 1)";
+    ctx.fillRect(-canvas.width * 2, 0, canvas.width * 4, canvas.height * 4);
+    ctx.fillStyle = "rgba(33, 150, 243, 1)";
+    ctx.fillRect(-canvas.width * 2, 0, canvas.width * 4, -canvas.height * 4);
+
+    // draw horizon line
+    ctx.strokeStyle = "rgba(0, 0, 0, 1)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-canvas.width * 2, 0);
+    ctx.lineTo(canvas.width * 2, 0);
+    ctx.stroke();
+
+    // crop to circle
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.translate(canvas.width/2, canvas.height/2);
+    ctx.globalCompositeOperation='destination-in';
+    ctx.beginPath()
+    ctx.arc(0, 0, canvas.width / 2 - 4, 0, 2 * Math.PI);
+    ctx.closePath()
+    ctx.fill();
+
 }
 
 // MINIMAP
 function draw_minimap() {
     // position & minimap
     let canvas = document.getElementById("minimap");
-    let context = canvas.getContext("2d");
+    let ctx = canvas.getContext("2d");
     canvas.width  = canvas.offsetWidth;
     canvas.height = canvas.offsetHeight;
 
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    context.transform(1, 0, 0, -1, 0, canvas.height);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.transform(1, 0, 0, -1, 0, canvas.height);
     let center = get_center();
 
     // draw minimap circle
-    context.strokeStyle = "black";
-    context.fillStyle = "white";
-    context.beginPath();
-    context.lineWidth = 2;
-    context.arc(canvas.width/2 + 1, canvas.height/2 + 1, canvas.width / 2 - 4, 0, 2 * Math.PI);
-    context.stroke();
-    context.fill();
+    ctx.fillStyle = "rgba(0, 128, 0, 1)";
+    ctx.beginPath();
+    ctx.arc(canvas.width/2 + 1, canvas.height/2 + 1, canvas.width / 2 - 4, 0, 2 * Math.PI);
+    ctx.fill();
 
     // center map
-    context.translate(canvas.width/2 - center.c_x, canvas.height/2 - center.c_y);
+    ctx.translate(canvas.width/2 - center.c_x, canvas.height/2 - center.c_y);
 
     // draw points
     let last_pos = null;
     for (let i = 0; i < pos_log.length; i++) {
         if (last_pos && (last_pos.x != pos_log[i].x || last_pos.y != pos_log[i].y)) {
-            context.lineWidth = 1;
-            context.beginPath();
-            context.moveTo(last_pos.x, last_pos.y);
-            context.lineTo(pos_log[i].x, pos_log[i].y);
-            context.stroke();
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(last_pos.x, last_pos.y);
+            ctx.lineTo(pos_log[i].x, pos_log[i].y);
+            ctx.stroke();
         }
         last_pos = pos_log[i];
     }
     if (last_pos) {
-        context.fillStyle = "red";
-        context.fillRect(last_pos.x, last_pos.y, 4, 4);
+        ctx.fillStyle = "red";
+        ctx.fillRect(last_pos.x, last_pos.y, 4, 4);
     }
 
     // draw anchors
     for (i = 0; i < anchors.length; i++) {
         if (i == 0)
-            context.fillStyle = "green";
+            ctx.fillStyle = "green";
         else if (i == 3)
-            context.fillStyle = "purple";
+            ctx.fillStyle = "purple";
         else
-            context.fillStyle = "blue";
-        context.fillRect(anchors[i].x - 2, anchors[i].y - 2, 4, 4);
+            ctx.fillStyle = "blue";
+        ctx.fillRect(anchors[i].x - 2, anchors[i].y - 2, 4, 4);
     }
 }
 
@@ -235,16 +293,18 @@ function update(ts) {
 
     time_diff_frame = ts - last_frame;
     time_diff_control = ts - last_control;
+    update_gamepads();
 
     if (time_diff_frame > FPS) {
         draw_reticle();
-        //draw_minimap();
+        draw_minimap();
+        draw_attitude();
         last_frame = ts;
     }
 
     if (time_diff_control > CPS) {
-        updateGamepads();
         last_control = ts;
+        send_joystick();
     }
 
 }
@@ -268,12 +328,14 @@ function connect() {
         if (!msg.a_x)
             document.getElementById("heading").innerHTML = '000';
         else {
-            let azim = Math.round(msg.a_x);
-            if (azim == 360)
-                azim = 0;
+            tank_status.a_x = Math.round(msg.a_x);
+            tank_status.a_y = Math.round(msg.a_y);
+            tank_status.a_z = Math.round(msg.a_z);
+            if (tank_status.a_x == 360)
+                tank_status.a_x = 0;
             lt_gauge.set(Math.round(msg.l_t));
             rt_gauge.set(Math.round(msg.r_t));
-            document.getElementById("heading").innerHTML = azim.toString(10).padStart(3,'0');
+            document.getElementById("heading").innerHTML = tank_status.a_x.toString(10).padStart(3,'0');
         }
         
         // update position log
@@ -283,55 +345,54 @@ function connect() {
     };
 }
 
-var joystick = new VirtualJoystick({
+let virt_joystick = new VirtualJoystick({
     container : document.getElementById('interface'),
     mouseSupport : true,
     limitStickTravel : true,
     stickRadius: 100
 });
 
-joystick.addEventListener('touchStart', function(){
+virt_joystick.addEventListener('touchStart', function(){
     console.log('down')
 });
 
-joystick.addEventListener('touchEnd', function(){
+virt_joystick.addEventListener('touchEnd', function(){
     console.log('up')
 });
 
-function sendJoystick(j) {
+function send_joystick(j) {
     if (ws.readyState == 1) {
+        /*
         pos = { x: j.deltaX(), y: -j.deltaY() };
         pos.x = pos.x / 100;
         pos.y = pos.y / 100;
         x = Math.round(0.5 * Math.sqrt(2 + Math.pow(pos.x, 2) - Math.pow(pos.y, 2) + 2 * pos.x * Math.sqrt(2)) - 0.5 * Math.sqrt(2 + Math.pow(pos.x, 2) - Math.pow(pos.y, 2) - 2 * pos.x * Math.sqrt(2)));
         y = Math.round(0.5 * Math.sqrt(2 - Math.pow(pos.x, 2) + Math.pow(pos.y, 2) + 2 * pos.y * Math.sqrt(2)) - 0.5 * Math.sqrt(2 - Math.pow(pos.x, 2) + Math.pow(pos.y, 2) - 2 * pos.y * Math.sqrt(2)));
         pos.t = 't';
-        ws.send(JSON.stringify(pos));
+        */
+        let msg = { t: 't', x: joystick.x, y: joystick.y };
+        ws.send(JSON.stringify(msg));
     }
 }
 
-function fireWeaponWrapper() {
+function fire_weapon_wrapper() {
     if (weapon_ready) {
         weapon_ready = false;
-        fireWeapon(10);
+        fire_weapon(10);
     }
 }
 
-function fireWeapon(times) {
+function fire_weapon(times) {
     if (ws.readyState == 1) {
         msg = { t: 'f' };
         ws.send(JSON.stringify(msg));
     }
     times--;
     if (times > 0)
-        setTimeout(function() { fireWeapon(times); }, 50);
+        setTimeout(function() { fire_weapon(times); }, 50);
     else
         weapon_ready = true;
 }
-
-setInterval(function() {
-    //sendJoystick(joystick);
-}, 50);
 
 function toggleFullScreen() {
     var doc = window.document;
@@ -365,27 +426,27 @@ document.getElementById("steering-button").addEventListener("click", function() 
 let haveEvents = 'ongamepadconnected' in window;
 let controllers = {};
 
-function connectGamepad(e) {
-    addGamepad(e.gamepad);
+function connect_gamepad(e) {
+    add_gamepad(e.gamepad);
 }
 
-function addGamepad(gamepad) {
+function add_gamepad(gamepad) {
     controllers[gamepad.index] = gamepad;
 }
 
-function disconnectGamepad(e) {
-    removeGamepad(e.gamepad);
+function disconnect_gamepad(e) {
+    remove_gamepad(e.gamepad);
 }
 
-function removeGamepad(gamepad) {
+function remove_gamepad(gamepad) {
     let d = document.getElementById("controller" + gamepad.index);
     document.body.removeChild(d);
     delete controllers[gamepad.index];
 }
 
-function updateGamepads() {
+function update_gamepads() {
     if (!haveEvents) {
-        scanGamepads();
+        scan_gamepads();
     }
 
     let i = 0;
@@ -399,35 +460,33 @@ function updateGamepads() {
             }
         }
         if (ws.readyState == 1 && controller.axes.length > 2) {
-            let pos = { t: 't', x: 0, y: 0 };
             if (Math.abs(controller.axes[0]) > 0.2 || Math.abs(controller.axes[1]) > 0.2) {
-                pos.x = controller.axes[0];
-                pos.y = -controller.axes[1];
+                joystick.x = controller.axes[0];
+                joystick.y = -controller.axes[1];
             }
-            ws.send(JSON.stringify(pos));
         }
     }
 }
 
-function scanGamepads() {
+function scan_gamepads() {
     let gamepads = navigator.getGamepads ? navigator.getGamepads() : (navigator.webkitGetGamepads ? navigator.webkitGetGamepads() : []);
     for (let i = 0; i < gamepads.length; i++) {
         if (gamepads[i]) {
             if (gamepads[i].index in controllers) {
                 controllers[gamepads[i].index] = gamepads[i];
             } else {
-                addGamepad(gamepads[i]);
+                add_gamepad(gamepads[i]);
             }
         }
     }
 }
 
 
-window.addEventListener("gamepadconnected", connectGamepad);
-window.addEventListener("gamepaddisconnected", disconnectGamepad);
+window.addEventListener("gamepadconnected", connect_gamepad);
+window.addEventListener("gamepaddisconnected", disconnect_gamepad);
 
 if (!haveEvents) {
-  setInterval(scanGamepads, 500);
+  setInterval(scan_gamepads, 500);
 }
 
 
@@ -445,9 +504,11 @@ var gauge_opts = {
 	limitMin: false,
 	generateGradient: true,
 	staticZones: [
-	   {strokeStyle: "#FF0000", min: -255, max: -200},
-	   {strokeStyle: "#008000", min: -200, max: 200},
-	   {strokeStyle: "#FF0000", min: 200, max: 255}
+	   {strokeStyle: "#ff0000", min: -255, max: -200},
+	   {strokeStyle: "#008000", min: -200, max: -10},
+	   {strokeStyle: "#ffffff", min: -10, max: 10},
+	   {strokeStyle: "#008000", min: 10, max: 200},
+	   {strokeStyle: "#ff0000", min: 200, max: 255}
 	],
 	highDpiSupport: true,     // High resolution support
 };
@@ -482,7 +543,7 @@ var websocketSignalingChannel = new WebSocketSignalingChannel(document.getElemen
 
     document.addEventListener('keydown', function(event) {
         if(event.keyCode == 32) {
-            fireWeaponWrapper();
+            fire_weapon_wrapper();
         }
     });
 })();

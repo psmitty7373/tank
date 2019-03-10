@@ -10,17 +10,20 @@
             <div id="hud">
                 <div id="heading">000</div>
                 <canvas id="hud_canvas"></canvas>
+                <canvas id="minimap"></canvas>
+                <div id="gauge-bar">
+                    <canvas id="left-throttle" class="gauge"></canvas>
+                    <label class="gauge-label">Left Thr</label>
+                    <canvas id="right-throttle" class="gauge"></canvas>
+                    <label class="gauge-label">Right Thr</label>
+                    <canvas id="attitude" class="gauge"></canvas>
+                </div>
+                <div id="menu-bar">
+                    <button id="steering-button" class="menu-button"></button>
+                    <button id="fullscreen-button" class="menu-button"></button>
+                </div>
             </div>
             <div id="interface"></div>
-            <div id="menu-bar">
-                <button id="steering-button" class="menu-button"></button>
-                <button id="fullscreen-button" class="menu-button"></button>
-            </div>
-            <div id="gauge-bar">
-                <canvas id="left-throttle" class="gauge"></canvas>
-                <canvas id="right-throttle" class="gauge"></canvas>
-            </div>
-            <canvas id="minimap"></canvas>
             <canvas id="opencv"></canvas>
             <div id="status-bar" style="display:none;"></div>
         </div>
