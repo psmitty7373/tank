@@ -14,13 +14,19 @@ let anchors = [
 
 let pos_log = [];
 let FPS = 1000/60;
-let last_time = 0;
-let start_time = 0;
+let CPS = 1000/20;
+let last_frame = 0;
+let last_control = 0;
+let time_diff_frame = 0;
+let time_diff_control = 0;
 let video = document.getElementById('remoteVideo');
 let reticle_color = "green";
 let weapon_ready = true;
+// GAUGES
+let lt_gauge = null;
+let rt_gauge = null;
 
-
+// OPENCV
 function get_topdown_quad(points, src) {
     let dest = new cv.Mat();
     let corner1 = new cv.Point(points.data32S[0], points.data32S[1]);
@@ -116,9 +122,9 @@ cv['onRuntimeInitialized']=()=>{
 
 
     //    cv.imshow('opencv', src);
-        setTimeout(processFrame, 100);
+//        setTimeout(processFrame, 100);
     }
-    setTimeout(processFrame, 0);
+//    setTimeout(processFrame, 0);
 }
 
 function get_center() {
@@ -133,6 +139,7 @@ function get_center() {
     return { c_x: c_x, c_y: c_y };
 }
 
+// RETICLE
 function draw_reticle() {
     // reticle
     let canvas = document.getElementById("hud_canvas");
@@ -170,6 +177,7 @@ function draw_reticle() {
     context.stroke();
 }
 
+// MINIMAP
 function draw_minimap() {
     // position & minimap
     let canvas = document.getElementById("minimap");
@@ -222,20 +230,23 @@ function draw_minimap() {
     }
 }
 
-function draw(ts) {
-    if (!start_time)
-        start_time = ts;
+function update(ts) {
+    requestAnimationFrame(update);
 
-    let time_diff = last_time ? ts - last_time : FPS;
-    let time_elapsed = ts - start_time;
-    let time_scale = time_diff / FPS;
-    
-    last_time = ts;
+    time_diff_frame = ts - last_frame;
+    time_diff_control = ts - last_control;
 
-    draw_reticle();
-    draw_minimap();
+    if (time_diff_frame > FPS) {
+        draw_reticle();
+        //draw_minimap();
+        last_frame = ts;
+    }
 
-    requestAnimationFrame(draw);
+    if (time_diff_control > CPS) {
+        updateGamepads();
+        last_control = ts;
+    }
+
 }
 
 function connect() {
@@ -260,6 +271,8 @@ function connect() {
             let azim = Math.round(msg.a_x);
             if (azim == 360)
                 azim = 0;
+            lt_gauge.set(Math.round(msg.l_t));
+            rt_gauge.set(Math.round(msg.r_t));
             document.getElementById("heading").innerHTML = azim.toString(10).padStart(3,'0');
         }
         
@@ -317,7 +330,7 @@ function fireWeapon(times) {
 }
 
 setInterval(function() {
-    sendJoystick(joystick);
+    //sendJoystick(joystick);
 }, 50);
 
 function toggleFullScreen() {
@@ -348,8 +361,101 @@ document.getElementById("steering-button").addEventListener("click", function() 
     }
 }, false);
 
+// GAMEPADS
+let haveEvents = 'ongamepadconnected' in window;
+let controllers = {};
+
+function connectGamepad(e) {
+    addGamepad(e.gamepad);
+}
+
+function addGamepad(gamepad) {
+    controllers[gamepad.index] = gamepad;
+}
+
+function disconnectGamepad(e) {
+    removeGamepad(e.gamepad);
+}
+
+function removeGamepad(gamepad) {
+    let d = document.getElementById("controller" + gamepad.index);
+    document.body.removeChild(d);
+    delete controllers[gamepad.index];
+}
+
+function updateGamepads() {
+    if (!haveEvents) {
+        scanGamepads();
+    }
+
+    let i = 0;
+    let j;
+
+    for (j in controllers) {
+        let controller = controllers[j];
+        for (i = 0; i < controller.buttons.length; i++) {
+            let val = controller.buttons[i];
+            if (typeof(val) == "object") {
+            }
+        }
+        if (ws.readyState == 1 && controller.axes.length > 2) {
+            let pos = { t: 't', x: 0, y: 0 };
+            if (Math.abs(controller.axes[0]) > 0.2 || Math.abs(controller.axes[1]) > 0.2) {
+                pos.x = controller.axes[0];
+                pos.y = -controller.axes[1];
+            }
+            ws.send(JSON.stringify(pos));
+        }
+    }
+}
+
+function scanGamepads() {
+    let gamepads = navigator.getGamepads ? navigator.getGamepads() : (navigator.webkitGetGamepads ? navigator.webkitGetGamepads() : []);
+    for (let i = 0; i < gamepads.length; i++) {
+        if (gamepads[i]) {
+            if (gamepads[i].index in controllers) {
+                controllers[gamepads[i].index] = gamepads[i];
+            } else {
+                addGamepad(gamepads[i]);
+            }
+        }
+    }
+}
+
+
+window.addEventListener("gamepadconnected", connectGamepad);
+window.addEventListener("gamepaddisconnected", disconnectGamepad);
+
+if (!haveEvents) {
+  setInterval(scanGamepads, 500);
+}
+
+
+// GAUGES:
+var gauge_opts = {
+	angle: 0.15, // The span of the gauge arc
+	lineWidth: 0.44, // The line thickness
+	radiusScale: 1, // Relative radius
+	pointer: {
+		length: 0.6, // // Relative to gauge radius
+		strokeWidth: 0.035, // The thickness
+		color: '#000000'
+	},
+	limitMax: false,
+	limitMin: false,
+	generateGradient: true,
+	staticZones: [
+	   {strokeStyle: "#FF0000", min: -255, max: -200},
+	   {strokeStyle: "#008000", min: -200, max: 200},
+	   {strokeStyle: "#FF0000", min: 200, max: 255}
+	],
+	highDpiSupport: true,     // High resolution support
+};
+
+// START REMOTE VIDEO
 var websocketSignalingChannel = new WebSocketSignalingChannel(document.getElementById("remoteVideo"));
 
+// DOCUMENT READY
 (function() {
     connect();
     websocketSignalingChannel.doSignalingConnect()
@@ -358,10 +464,23 @@ var websocketSignalingChannel = new WebSocketSignalingChannel(document.getElemen
     canvas.width  = canvas.offsetWidth;
     canvas.height = canvas.offsetHeight;
 
-    requestAnimationFrame(draw);
+    let target = document.getElementById('left-throttle');
+    lt_gauge = new Gauge(target).setOptions(gauge_opts);
+    lt_gauge.maxValue = 255;
+    lt_gauge.setMinValue(-255);
+    lt_gauge.animationSpeed = 32;
+    lt_gauge.set(0);
+
+    target = document.getElementById('right-throttle');
+    rt_gauge = new Gauge(target).setOptions(gauge_opts);
+    rt_gauge.maxValue = 255;
+    rt_gauge.setMinValue(-255);
+    rt_gauge.animationSpeed = 32;
+    rt_gauge.set(0);
+
+    requestAnimationFrame(update);
 
     document.addEventListener('keydown', function(event) {
-        console.log(event.keyCode);
         if(event.keyCode == 32) {
             fireWeaponWrapper();
         }

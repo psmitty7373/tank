@@ -103,6 +103,7 @@ class Tank(multiprocessing.Process):
         self.right_dir = 'f'
         self.right_braking = False
         self.right_brake_time = time.time() * 1000
+        self.r_t = 0
 
         #left
         self.pi.set_mode(left_pwm_f, pigpio.OUTPUT)
@@ -110,6 +111,7 @@ class Tank(multiprocessing.Process):
         self.left_dir = 'f'
         self.left_braking = False
         self.left_brake_time = time.time() * 1000
+        self.l_t = 0
 
         self.current = 0
         self.volts = 0
@@ -224,7 +226,7 @@ class Tank(multiprocessing.Process):
                 self.failsafe_time = curr_time
                 task = self.tasks.get()
                 if task['task_type'] == "throttle_update":
-                    r, l = task['payload']
+                    self.r_t, self.l_t = task['payload']
                 elif task['task_type'] == "fire_weapon":
                     self.weapon_reload_time = curr_time
                     self.weapon_ready = False
@@ -233,7 +235,7 @@ class Tank(multiprocessing.Process):
                     self.running = False
 
                 # right motor
-                if r > 0: # forward
+                if self.r_t > 0: # forward
                     # changing directions
                     if self.right_dir == 'b':
                         # start braking
@@ -250,7 +252,7 @@ class Tank(multiprocessing.Process):
                     elif self.right_braking:
                         self.right_braking = False
 
-                elif r < 0:
+                elif self.r_t < 0:
                     if self.right_dir == 'f':
                         # start braking
                         if not self.right_braking:
@@ -267,7 +269,7 @@ class Tank(multiprocessing.Process):
                         self.right_braking = False
 
                 # left motor
-                if l > 0: # forward
+                if self.l_t > 0: # forward
                     # changing directions
                     if self.left_dir == 'b':
                         # start braking
@@ -284,7 +286,7 @@ class Tank(multiprocessing.Process):
                     elif self.left_braking:
                         self.left_braking = False
 
-                elif l < 0:
+                elif self.l_t < 0:
                     if self.left_dir == 'f':
                         # start braking
                         if not self.left_braking:
@@ -301,33 +303,33 @@ class Tank(multiprocessing.Process):
                         self.left_braking = False
 
                 #left motor speed
-                if l == 0 or self.left_braking:
+                if self.l_t == 0 or self.left_braking:
                     self.pi.set_PWM_dutycycle(left_pwm_f, 0)
                     self.pi.set_PWM_dutycycle(left_pwm_r, 0)
                 else:
                     if self.left_dir == 'f':
                         self.pi.set_PWM_dutycycle(left_pwm_r, 0)
-                        self.pi.set_PWM_dutycycle(left_pwm_f, abs(l))
+                        self.pi.set_PWM_dutycycle(left_pwm_f, abs(self.l_t))
                     else:
                         self.pi.set_PWM_dutycycle(left_pwm_f, 0)
-                        self.pi.set_PWM_dutycycle(left_pwm_r, abs(l))
+                        self.pi.set_PWM_dutycycle(left_pwm_r, abs(self.l_t))
 
                 #right motor speed
-                if r == 0 or self.right_braking:
+                if self.r_t == 0 or self.right_braking:
                     self.pi.set_PWM_dutycycle(right_pwm_f, 0)
                     self.pi.set_PWM_dutycycle(right_pwm_r, 0)
                 else:
                     if self.right_dir == 'f':
                         self.pi.set_PWM_dutycycle(right_pwm_r, 0)
-                        self.pi.set_PWM_dutycycle(right_pwm_f, abs(r))
+                        self.pi.set_PWM_dutycycle(right_pwm_f, abs(self.r_t))
                     else:
                         self.pi.set_PWM_dutycycle(right_pwm_f, 0)
-                        self.pi.set_PWM_dutycycle(right_pwm_r, abs(r))
+                        self.pi.set_PWM_dutycycle(right_pwm_r, abs(self.r_t))
 
                 #semd status back
                 if not self.results.full() and time.time() * 1000 - self.heartbeat_time > 200:
                     self.heartbeat_time = time.time() * 1000
-                    self.results.put({ 'current': self.current, 'volts': self.volts, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
+                    self.results.put({ 'current': self.current, 'volts': self.volts, 'l_t': self.l_t, 'r_t': self.r_t, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
             time.sleep(0.01)
 
         print("Shutting down...")

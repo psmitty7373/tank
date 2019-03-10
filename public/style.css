@@ -8,12 +8,18 @@ body {
     font-family: "ocr-a-std";
     src: url("ocr.woff2") format("woff2");
 }
-.menu-button {
-    height: 10vh;
-    width: 10vh;
-    cursor: pointer;
-    padding: 10px;
+.gauge {
     border: none;
+    padding: 0px;
+    width: 100%;
+}
+#gauge-bar {
+    right: 0px;
+    width: 12%;
+    height: 100%;
+    border: none;
+    position: absolute;
+    z-index: 20;
 }
 #steering-button {
 	background: url("images/steering.png") no-repeat scroll 0 0 transparent;
@@ -82,10 +88,17 @@ body {
     width: 100%;
     height: 100%;
 }
+.menu-button {
+    height: 6vh;
+    width: 6vh;
+    cursor: pointer;
+    padding: 10px;
+    border: none;
+}
 #menu-bar {
 	background: green;
 	width: 60%;
-	height: 10%;
+	height: 6%;
 	position: absolute;
 	left: 20%;
 	bottom: 0px;

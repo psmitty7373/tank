@@ -16,6 +16,10 @@
                 <button id="steering-button" class="menu-button"></button>
                 <button id="fullscreen-button" class="menu-button"></button>
             </div>
+            <div id="gauge-bar">
+                <canvas id="left-throttle" class="gauge"></canvas>
+                <canvas id="right-throttle" class="gauge"></canvas>
+            </div>
             <canvas id="minimap"></canvas>
             <canvas id="opencv"></canvas>
             <div id="status-bar" style="display:none;"></div>
@@ -25,6 +29,7 @@
         <script src="peerconnection_client.js"></script>
         <script src="websocket_signaling.js"></script>
         <script src="opencv.js"></script>
+        <script src="gauge.min.js"></script>
         <script src="tank.js"></script>
         <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
     </body>
