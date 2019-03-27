@@ -13,6 +13,8 @@ right_pwm_r = 27
 left_pwm_f = 23
 left_pwm_r = 24
 
+min_throttle = 50.0
+
 serial_port_enabled = False
 serial_port_mode = "UWB"
 serial_port_baud = 115200
@@ -25,47 +27,42 @@ def translate(value, leftMin, leftMax, rightMin, rightMax):
     valueScaled = float(value - leftMin) / float(leftSpan)
     return rightMin + (valueScaled * rightSpan)
 
-def steering(x, y):
-    my = math.copysign(max(math.fabs(y), math.fabs(x)), y)
+def steering2(x, y):
+    if y >= 0: # forward
+        if x >= 0: # right
+            premix_l = 1.0
+            premix_r = 1.0 - 1.5 * x
+        else: # left
+            premix_l = 1.0 + 1.5 * x
+            premix_r = 1.0
+    else: # backward
+        if x >= 0: # right
+            premix_l = 1.0 - x
+            premix_r = 1.0
+        else: # left
+            premix_l = 1.0
+            premix_r = 1.0 + x
 
-    turn = False
-    if abs(y) < 0.15:
-        turn = True
+    premix_l = premix_l * y
+    premix_r = premix_r * y
 
-    if y >= 0:
-        if x >= 0:
-            l = my
-            r = y - x
-        else:
-            l = y + x
-            r = my
+    piv_speed = 0.15 * x
+    if abs(y) > 0.3:
+        piv_scale = 0.0
     else:
-        if x >= 0:
-            l = y + x
-            r = my
-        else:
-            l = my
-            r = y - x
+        piv_scale = 1.0 - abs(y) / 0.3
 
-    # limit turn speed
-    if turn:
-        if abs(r) > 0.3:
-            r = math.copysign(0.3, r)
-        if abs(l) > 0.3:
-            l = math.copysign(0.3, l)
-    # straight
-    else:
-        if y > 0: #forward
-            if r - l > 0.5 and r > 0.6:
-                l = r - 0.5
-            elif l - r > 0.5 and l > 0.6:
-                r = l - 0.5
-        else: #backwards
-            pass
+    l = (1.0 - piv_scale) * premix_l + piv_scale * piv_speed
+    r = (1.0 - piv_scale) * premix_r + piv_scale * -piv_speed
+
 
     # translate to pwm
     r = translate(r, -1, 1, -255, 255)
     l = translate(l, -1, 1, -255, 255)
+    if abs(r) > 0:
+        r = math.copysign(translate(abs(r), 0, 255, min_throttle, 255), r)
+    if abs(l) > 0:
+        l = math.copysign(translate(abs(l), 0, 255, min_throttle, 255), l)
     return (round(r), round(l))
 
 class Tank(multiprocessing.Process):
@@ -106,6 +103,7 @@ class Tank(multiprocessing.Process):
         self.right_dir = 'f'
         self.right_braking = False
         self.right_brake_time = time.time() * 1000
+        self.r_t = 0
 
         #left
         self.pi.set_mode(left_pwm_f, pigpio.OUTPUT)
@@ -113,6 +111,7 @@ class Tank(multiprocessing.Process):
         self.left_dir = 'f'
         self.left_braking = False
         self.left_brake_time = time.time() * 1000
+        self.l_t = 0
 
         self.current = 0
         self.volts = 0
@@ -227,16 +226,16 @@ class Tank(multiprocessing.Process):
                 self.failsafe_time = curr_time
                 task = self.tasks.get()
                 if task['task_type'] == "throttle_update":
-                    r, l = task['payload']
+                    self.r_t, self.l_t = task['payload']
                 elif task['task_type'] == "fire_weapon":
                     self.weapon_reload_time = curr_time
                     self.weapon_ready = False
-                    self.weapon.send(7)
+                    self.weapon.send(ord('A'))
                 elif task['task_type'] == "shutdown":
                     self.running = False
 
                 # right motor
-                if r > 0: # forward
+                if self.r_t > 0: # forward
                     # changing directions
                     if self.right_dir == 'b':
                         # start braking
@@ -253,7 +252,7 @@ class Tank(multiprocessing.Process):
                     elif self.right_braking:
                         self.right_braking = False
 
-                elif r < 0:
+                elif self.r_t < 0:
                     if self.right_dir == 'f':
                         # start braking
                         if not self.right_braking:
@@ -270,7 +269,7 @@ class Tank(multiprocessing.Process):
                         self.right_braking = False
 
                 # left motor
-                if l > 0: # forward
+                if self.l_t > 0: # forward
                     # changing directions
                     if self.left_dir == 'b':
                         # start braking
@@ -287,7 +286,7 @@ class Tank(multiprocessing.Process):
                     elif self.left_braking:
                         self.left_braking = False
 
-                elif l < 0:
+                elif self.l_t < 0:
                     if self.left_dir == 'f':
                         # start braking
                         if not self.left_braking:
@@ -304,37 +303,37 @@ class Tank(multiprocessing.Process):
                         self.left_braking = False
 
                 #left motor speed
-                if l == 0 or self.left_braking:
+                if self.l_t == 0 or self.left_braking:
                     self.pi.set_PWM_dutycycle(left_pwm_f, 0)
                     self.pi.set_PWM_dutycycle(left_pwm_r, 0)
                 else:
                     if self.left_dir == 'f':
                         self.pi.set_PWM_dutycycle(left_pwm_r, 0)
-                        self.pi.set_PWM_dutycycle(left_pwm_f, abs(l))
+                        self.pi.set_PWM_dutycycle(left_pwm_f, abs(self.l_t))
                     else:
                         self.pi.set_PWM_dutycycle(left_pwm_f, 0)
-                        self.pi.set_PWM_dutycycle(left_pwm_r, abs(l))
+                        self.pi.set_PWM_dutycycle(left_pwm_r, abs(self.l_t))
 
                 #right motor speed
-                if r == 0 or self.right_braking:
+                if self.r_t == 0 or self.right_braking:
                     self.pi.set_PWM_dutycycle(right_pwm_f, 0)
                     self.pi.set_PWM_dutycycle(right_pwm_r, 0)
                 else:
                     if self.right_dir == 'f':
                         self.pi.set_PWM_dutycycle(right_pwm_r, 0)
-                        self.pi.set_PWM_dutycycle(right_pwm_f, abs(r))
+                        self.pi.set_PWM_dutycycle(right_pwm_f, abs(self.r_t))
                     else:
                         self.pi.set_PWM_dutycycle(right_pwm_f, 0)
-                        self.pi.set_PWM_dutycycle(right_pwm_r, abs(r))
-
-                #semd status back
-                if not self.results.full() and time.time() * 1000 - self.heartbeat_time > 200:
-                    self.heartbeat_time = time.time() * 1000
-                    self.results.put({ 'current': self.current, 'volts': self.volts, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
-            time.sleep(0.05)
+                        self.pi.set_PWM_dutycycle(right_pwm_r, abs(self.r_t))
+            #send current status
+            if not self.results.full() and time.time() * 1000 - self.heartbeat_time > 100:
+                self.heartbeat_time = time.time() * 1000
+                self.results.put({ 'current': self.current, 'volts': self.volts, 'l_t': self.l_t, 'r_t': self.r_t, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
+            time.sleep(0.01)
 
         print("Shutting down...")
-        self.pi.serial_close(self.s1)
+        if serial_port_enabled:
+            self.pi.serial_close(self.s1)
 
 
 public = os.path.join(os.path.dirname(__file__), 'public')
@@ -360,7 +359,7 @@ class WebSocket(tornado.websocket.WebSocketHandler):
     def on_message(self, msg):
         msg = json.loads(msg)
         if msg['t'] == 't':
-            r, l = steering(msg['x'], msg['y'])
+            r, l = steering2(msg['x'], msg['y'])
             self.tasks.put({'task_type': 'throttle_update', 'payload': (r,l)})
         elif msg['t'] == 'f':
             self.tasks.put({'task_type': 'fire_weapon'})
@@ -380,7 +379,8 @@ def make_app(tasks, results):
 
 def signal_handler(signal, frame):
     print("Stopping Tornado.")
-    tornado.ioloop.IOLoop.current().stop()
+    ioloop = tornado.ioloop.IOLoop.instance()
+    ioloop.add_callback(ioloop.stop)
 
 def main():
     tasks = multiprocessing.JoinableQueue()

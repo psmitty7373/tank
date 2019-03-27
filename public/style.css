@@ -8,11 +8,21 @@ body {
     font-family: "ocr-a-std";
     src: url("ocr.woff2") format("woff2");
 }
-.menu-button {
-    height: 10vh;
-    width: 10vh;
-    cursor: pointer;
-    padding: 10px;
+.gauge {
+    border: none;
+    padding: 0px;
+    width: 100%;
+}
+#gauge-bar {
+    right: 0px;
+    width: 12%;
+    height: 100%;
+    border: none;
+    position: absolute;
+}
+.gauge-label {
+    font-size: 10px;
+    font-family: ocr-a-std;
 }
 #steering-button {
 	background: url("images/steering.png") no-repeat scroll 0 0 transparent;
@@ -41,6 +51,7 @@ body {
     position: absolute;
     left: 0px;
     top: 0px;
+    opacity: 0.5;
 }
 #heading {
     width: 100px;
@@ -48,8 +59,11 @@ body {
     line-height: 50px;
     background-color: green;
     top: 0px;
+    left: 0px;
+    right: 0px;
+    position: absolute;
     display: table;
-    margin: 0 auto;
+    margin: auto;
     font-size: 30px;
     font-family: ocr-a-std;
 }
@@ -59,7 +73,6 @@ body {
     pointer-events: none;
 }
 #minimap {
-    z-index: 7;
     position: absolute;
     left: 0px;
     top: 0px;
@@ -77,15 +90,25 @@ body {
 #remoteVideo {
 	z-index: 1;
 	position: absolute;
+    width: 100%;
+    height: 100%;
+}
+.menu-button {
+    height: 6vh;
+    width: 6vh;
+    cursor: pointer;
+    padding: 10px;
+    border: none;
 }
 #menu-bar {
-	background: white;
+	background: green;
 	width: 60%;
-	height: 10%;
+	height: 6%;
 	position: absolute;
 	left: 20%;
 	bottom: 0px;
 	z-index: 20;
+    border: 1px solid black;
 }
 #status-bar {
     z-index: 5;

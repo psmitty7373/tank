@@ -5,6 +5,7 @@ function isPrivateAddress(ipaddress) {
             (parts[0] === '192' && parts[1] === '168');
 };
 
+// GLOBALS
 let anchors = [
         {id: 'a', x: 0, y: 0, z: 0 },
         {id: 'b', x: 0, y: 200, z: 0},
@@ -13,13 +14,23 @@ let anchors = [
 ];
 
 let pos_log = [];
+let joystick = { x: 0, y: 0 };
+let tank_status = { a_x: 0, a_y: 0, a_z: 0 };
 let FPS = 1000/60;
-let last_time = 0;
-let start_time = 0;
+let CPS = 1000/20;
+let last_frame = 0;
+let last_control = 0;
+let time_diff_frame = 0;
+let time_diff_control = 0;
 let video = document.getElementById('remoteVideo');
 let reticle_color = "green";
+let weapon_ready = true;
 
+// GAUGES
+let lt_gauge = null;
+let rt_gauge = null;
 
+// OPENCV
 function get_topdown_quad(points, src) {
     let dest = new cv.Mat();
     let corner1 = new cv.Point(points.data32S[0], points.data32S[1]);
@@ -115,9 +126,9 @@ cv['onRuntimeInitialized']=()=>{
 
 
     //    cv.imshow('opencv', src);
-        setTimeout(processFrame, 100);
+//        setTimeout(processFrame, 100);
     }
-    setTimeout(processFrame, 0);
+//    setTimeout(processFrame, 0);
 }
 
 function get_center() {
@@ -132,109 +143,170 @@ function get_center() {
     return { c_x: c_x, c_y: c_y };
 }
 
+// RETICLE
 function draw_reticle() {
     // reticle
     let canvas = document.getElementById("hud_canvas");
     canvas.width = canvas.offsetWidth;
     canvas.height = canvas.offsetHeight;
-    context = canvas.getContext("2d");
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    context.beginPath();
+    ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.beginPath();
     if (reticle_color == "green")
-        context.strokeStyle = "#00FF00";
+        ctx.strokeStyle = "#00FF00";
     else
-        context.strokeStyle = "#FF0000";
-    context.lineWidth = 3;
-    context.arc(canvas.width/2, canvas.height/2, 10, 0, 2 * Math.PI);
-    context.stroke();
+        ctx.strokeStyle = "#FF0000";
+    ctx.lineWidth = 3;
+    ctx.arc(canvas.width/2, canvas.height/2, 10, 0, 2 * Math.PI);
+    ctx.stroke();
     // right line
-    context.beginPath();
-    context.moveTo(canvas.width/2 + 10, canvas.height/2);
-    context.lineTo(canvas.width/2 + 65, canvas.height/2);
-    context.stroke();
+    ctx.beginPath();
+    ctx.moveTo(canvas.width/2 + 10, canvas.height/2);
+    ctx.lineTo(canvas.width/2 + 65, canvas.height/2);
+    ctx.stroke();
     // left line
-    context.beginPath();
-    context.moveTo(canvas.width/2 - 10, canvas.height/2);
-    context.lineTo(canvas.width/2 - 65, canvas.height/2);
-    context.stroke();
+    ctx.beginPath();
+    ctx.moveTo(canvas.width/2 - 10, canvas.height/2);
+    ctx.lineTo(canvas.width/2 - 65, canvas.height/2);
+    ctx.stroke();
     // top
-    context.beginPath();
-    context.moveTo(canvas.width/2, canvas.height/2 + 10);
-    context.lineTo(canvas.width/2, canvas.height/2 + 25);
-    context.stroke();
+    ctx.beginPath();
+    ctx.moveTo(canvas.width/2, canvas.height/2 + 10);
+    ctx.lineTo(canvas.width/2, canvas.height/2 + 25);
+    ctx.stroke();
     // bottom
-    context.beginPath();
-    context.moveTo(canvas.width/2, canvas.height/2 - 10);
-    context.lineTo(canvas.width/2, canvas.height/2 - 25);
-    context.stroke();
+    ctx.beginPath();
+    ctx.moveTo(canvas.width/2, canvas.height/2 - 10);
+    ctx.lineTo(canvas.width/2, canvas.height/2 - 25);
+    ctx.stroke();
 }
 
+function draw_attitude() {
+    let canvas = document.getElementById("attitude");
+    let ctx = canvas.getContext("2d");
+    canvas.width  = canvas.offsetWidth;
+    canvas.height = canvas.offsetWidth;
+
+    let center = get_center();
+    
+    // clear
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // normalize pitch and roll
+    let roll = 0;
+    let pitch = tank_status.a_z
+    if (Math.abs(pitch) < 90)
+        roll = tank_status.a_y;
+    else {
+        if (pitch > 0)
+            pitch = pitch % 90 - 90;
+        else
+            pitch = pitch % 90 + 90;
+        if (tank_status.a_y > 0)
+            roll = 180 - tank_status.a_y;
+        else
+            roll = -180 - tank_status.a_y;
+    }
+
+    // center / pitch / roll
+    ctx.translate(0, pitch);
+    ctx.translate(canvas.width/2, canvas.height/2);
+    ctx.rotate(roll * Math.PI / 180);
+
+    // draw sky / ground
+    ctx.fillStyle = "rgba(121, 85, 72, 1)";
+    ctx.fillRect(-canvas.width * 2, 0, canvas.width * 4, canvas.height * 4);
+    ctx.fillStyle = "rgba(33, 150, 243, 1)";
+    ctx.fillRect(-canvas.width * 2, 0, canvas.width * 4, -canvas.height * 4);
+
+    // draw horizon line
+    ctx.strokeStyle = "rgba(0, 0, 0, 1)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-canvas.width * 2, 0);
+    ctx.lineTo(canvas.width * 2, 0);
+    ctx.stroke();
+
+    // crop to circle
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.translate(canvas.width/2, canvas.height/2);
+    ctx.globalCompositeOperation='destination-in';
+    ctx.beginPath()
+    ctx.arc(0, 0, canvas.width / 2 - 4, 0, 2 * Math.PI);
+    ctx.closePath()
+    ctx.fill();
+
+}
+
+// MINIMAP
 function draw_minimap() {
     // position & minimap
     let canvas = document.getElementById("minimap");
-    let context = canvas.getContext("2d");
+    let ctx = canvas.getContext("2d");
     canvas.width  = canvas.offsetWidth;
     canvas.height = canvas.offsetHeight;
 
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    context.transform(1, 0, 0, -1, 0, canvas.height);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.transform(1, 0, 0, -1, 0, canvas.height);
     let center = get_center();
 
     // draw minimap circle
-    context.strokeStyle = "black";
-    context.fillStyle = "white";
-    context.beginPath();
-    context.lineWidth = 2;
-    context.arc(canvas.width/2 + 1, canvas.height/2 + 1, canvas.width / 2 - 4, 0, 2 * Math.PI);
-    context.stroke();
-    context.fill();
+    ctx.fillStyle = "rgba(0, 128, 0, 1)";
+    ctx.beginPath();
+    ctx.arc(canvas.width/2 + 1, canvas.height/2 + 1, canvas.width / 2 - 4, 0, 2 * Math.PI);
+    ctx.fill();
 
     // center map
-    context.translate(canvas.width/2 - center.c_x, canvas.height/2 - center.c_y);
+    ctx.translate(canvas.width/2 - center.c_x, canvas.height/2 - center.c_y);
 
     // draw points
     let last_pos = null;
     for (let i = 0; i < pos_log.length; i++) {
         if (last_pos && (last_pos.x != pos_log[i].x || last_pos.y != pos_log[i].y)) {
-            context.lineWidth = 1;
-            context.beginPath();
-            context.moveTo(last_pos.x, last_pos.y);
-            context.lineTo(pos_log[i].x, pos_log[i].y);
-            context.stroke();
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(last_pos.x, last_pos.y);
+            ctx.lineTo(pos_log[i].x, pos_log[i].y);
+            ctx.stroke();
         }
         last_pos = pos_log[i];
     }
     if (last_pos) {
-        context.fillStyle = "red";
-        context.fillRect(last_pos.x, last_pos.y, 4, 4);
+        ctx.fillStyle = "red";
+        ctx.fillRect(last_pos.x, last_pos.y, 4, 4);
     }
 
     // draw anchors
     for (i = 0; i < anchors.length; i++) {
         if (i == 0)
-            context.fillStyle = "green";
+            ctx.fillStyle = "green";
         else if (i == 3)
-            context.fillStyle = "purple";
+            ctx.fillStyle = "purple";
         else
-            context.fillStyle = "blue";
-        context.fillRect(anchors[i].x - 2, anchors[i].y - 2, 4, 4);
+            ctx.fillStyle = "blue";
+        ctx.fillRect(anchors[i].x - 2, anchors[i].y - 2, 4, 4);
     }
 }
 
-function draw(ts) {
-    if (!start_time)
-        start_time = ts;
+function update(ts) {
+    requestAnimationFrame(update);
 
-    let time_diff = last_time ? ts - last_time : FPS;
-    let time_elapsed = ts - start_time;
-    let time_scale = time_diff / FPS;
-    
-    last_time = ts;
+    time_diff_frame = ts - last_frame;
+    time_diff_control = ts - last_control;
+    update_gamepads();
 
-    draw_reticle();
-    draw_minimap();
+    if (time_diff_frame > FPS) {
+        draw_reticle();
+        draw_minimap();
+        draw_attitude();
+        last_frame = ts;
+    }
 
-    requestAnimationFrame(draw);
+    if (time_diff_control > CPS) {
+        last_control = ts;
+        send_joystick();
+    }
+
 }
 
 function connect() {
@@ -256,10 +328,14 @@ function connect() {
         if (!msg.a_x)
             document.getElementById("heading").innerHTML = '000';
         else {
-            let azim = Math.round(msg.a_x);
-            if (azim == 360)
-                azim = 0;
-            document.getElementById("heading").innerHTML = azim.toString(10).padStart(3,'0');
+            tank_status.a_x = Math.round(msg.a_x);
+            tank_status.a_y = Math.round(msg.a_y);
+            tank_status.a_z = Math.round(msg.a_z);
+            if (tank_status.a_x == 360)
+                tank_status.a_x = 0;
+            lt_gauge.set(Math.round(msg.l_t));
+            rt_gauge.set(Math.round(msg.r_t));
+            document.getElementById("heading").innerHTML = tank_status.a_x.toString(10).padStart(3,'0');
         }
         
         // update position log
@@ -269,50 +345,54 @@ function connect() {
     };
 }
 
-var joystick = new VirtualJoystick({
+let virt_joystick = new VirtualJoystick({
     container : document.getElementById('interface'),
     mouseSupport : true,
     limitStickTravel : true,
     stickRadius: 100
 });
 
-joystick.addEventListener('touchStart', function(){
+virt_joystick.addEventListener('touchStart', function(){
     console.log('down')
 });
 
-joystick.addEventListener('touchEnd', function(){
+virt_joystick.addEventListener('touchEnd', function(){
     console.log('up')
 });
 
-function sendJoystick(j) {
+function send_joystick(j) {
     if (ws.readyState == 1) {
+        /*
         pos = { x: j.deltaX(), y: -j.deltaY() };
         pos.x = pos.x / 100;
         pos.y = pos.y / 100;
         x = Math.round(0.5 * Math.sqrt(2 + Math.pow(pos.x, 2) - Math.pow(pos.y, 2) + 2 * pos.x * Math.sqrt(2)) - 0.5 * Math.sqrt(2 + Math.pow(pos.x, 2) - Math.pow(pos.y, 2) - 2 * pos.x * Math.sqrt(2)));
         y = Math.round(0.5 * Math.sqrt(2 - Math.pow(pos.x, 2) + Math.pow(pos.y, 2) + 2 * pos.y * Math.sqrt(2)) - 0.5 * Math.sqrt(2 - Math.pow(pos.x, 2) + Math.pow(pos.y, 2) - 2 * pos.y * Math.sqrt(2)));
         pos.t = 't';
-        ws.send(JSON.stringify(pos));
+        */
+        let msg = { t: 't', x: joystick.x, y: joystick.y };
+        ws.send(JSON.stringify(msg));
     }
 }
 
-function fireWeaponWrapper() {
-    fireWeapon(10);
+function fire_weapon_wrapper() {
+    if (weapon_ready) {
+        weapon_ready = false;
+        fire_weapon(10);
+    }
 }
 
-function fireWeapon(times) {
+function fire_weapon(times) {
     if (ws.readyState == 1) {
         msg = { t: 'f' };
         ws.send(JSON.stringify(msg));
     }
     times--;
     if (times > 0)
-        setTimeout(function() { fireWeapon(times); }, 50);
+        setTimeout(function() { fire_weapon(times); }, 50);
+    else
+        weapon_ready = true;
 }
-
-setInterval(function() {
-    sendJoystick(joystick);
-}, 100);
 
 function toggleFullScreen() {
     var doc = window.document;
@@ -342,8 +422,101 @@ document.getElementById("steering-button").addEventListener("click", function() 
     }
 }, false);
 
+// GAMEPADS
+let haveEvents = 'ongamepadconnected' in window;
+let controllers = {};
+
+function connect_gamepad(e) {
+    add_gamepad(e.gamepad);
+}
+
+function add_gamepad(gamepad) {
+    controllers[gamepad.index] = gamepad;
+}
+
+function disconnect_gamepad(e) {
+    remove_gamepad(e.gamepad);
+}
+
+function remove_gamepad(gamepad) {
+    let d = document.getElementById("controller" + gamepad.index);
+    document.body.removeChild(d);
+    delete controllers[gamepad.index];
+}
+
+function update_gamepads() {
+    if (!haveEvents) {
+        scan_gamepads();
+    }
+
+    let i = 0;
+    let j;
+
+    for (j in controllers) {
+        let controller = controllers[j];
+        for (i = 0; i < controller.buttons.length; i++) {
+            let val = controller.buttons[i];
+            if (typeof(val) == "object") {
+            }
+        }
+        if (ws.readyState == 1 && controller.axes.length > 2) {
+            if (Math.abs(controller.axes[0]) > 0.2 || Math.abs(controller.axes[1]) > 0.2) {
+                joystick.x = controller.axes[0];
+                joystick.y = -controller.axes[1];
+            }
+        }
+    }
+}
+
+function scan_gamepads() {
+    let gamepads = navigator.getGamepads ? navigator.getGamepads() : (navigator.webkitGetGamepads ? navigator.webkitGetGamepads() : []);
+    for (let i = 0; i < gamepads.length; i++) {
+        if (gamepads[i]) {
+            if (gamepads[i].index in controllers) {
+                controllers[gamepads[i].index] = gamepads[i];
+            } else {
+                add_gamepad(gamepads[i]);
+            }
+        }
+    }
+}
+
+
+window.addEventListener("gamepadconnected", connect_gamepad);
+window.addEventListener("gamepaddisconnected", disconnect_gamepad);
+
+if (!haveEvents) {
+  setInterval(scan_gamepads, 500);
+}
+
+
+// GAUGES:
+var gauge_opts = {
+	angle: 0.15, // The span of the gauge arc
+	lineWidth: 0.44, // The line thickness
+	radiusScale: 1, // Relative radius
+	pointer: {
+		length: 0.6, // // Relative to gauge radius
+		strokeWidth: 0.035, // The thickness
+		color: '#000000'
+	},
+	limitMax: false,
+	limitMin: false,
+	generateGradient: true,
+	staticZones: [
+	   {strokeStyle: "#ff0000", min: -255, max: -200},
+	   {strokeStyle: "#008000", min: -200, max: -10},
+	   {strokeStyle: "#ffffff", min: -10, max: 10},
+	   {strokeStyle: "#008000", min: 10, max: 200},
+	   {strokeStyle: "#ff0000", min: 200, max: 255}
+	],
+	highDpiSupport: true,     // High resolution support
+};
+
+// START REMOTE VIDEO
 var websocketSignalingChannel = new WebSocketSignalingChannel(document.getElementById("remoteVideo"));
 
+// DOCUMENT READY
 (function() {
     connect();
     websocketSignalingChannel.doSignalingConnect()
@@ -352,6 +525,25 @@ var websocketSignalingChannel = new WebSocketSignalingChannel(document.getElemen
     canvas.width  = canvas.offsetWidth;
     canvas.height = canvas.offsetHeight;
 
+    let target = document.getElementById('left-throttle');
+    lt_gauge = new Gauge(target).setOptions(gauge_opts);
+    lt_gauge.maxValue = 255;
+    lt_gauge.setMinValue(-255);
+    lt_gauge.animationSpeed = 32;
+    lt_gauge.set(0);
 
-    requestAnimationFrame(draw);
+    target = document.getElementById('right-throttle');
+    rt_gauge = new Gauge(target).setOptions(gauge_opts);
+    rt_gauge.maxValue = 255;
+    rt_gauge.setMinValue(-255);
+    rt_gauge.animationSpeed = 32;
+    rt_gauge.set(0);
+
+    requestAnimationFrame(update);
+
+    document.addEventListener('keydown', function(event) {
+        if(event.keyCode == 32) {
+            fire_weapon_wrapper();
+        }
+    });
 })();
