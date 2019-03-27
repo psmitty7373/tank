@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import pigpio, sys, time
+import pigpio, sys, time, queue
 
 MIN_SHORT = 789
 MAX_SHORT = 989
@@ -24,7 +24,7 @@ COMMAND_MASK = 0xff
 COMMAND_SHIFT = 0
 
 class RC5_read:
-    def __init__(self, pi, gpio):
+    def __init__(self, pi, gpio, q):
         self.pi = pi
         self.gpio = gpio
         self.lt = 0
@@ -35,8 +35,9 @@ class RC5_read:
         self.last_re = None
         self.first_re = None
         self.last_call = None
-        self.auto_modulated = True
-        self.invert_logic = True
+        self.auto_modulated = False
+        self.invert_logic = False
+        self.q = q
 
         pi.set_mode(gpio, pigpio.INPUT)
         if self.auto_modulated:
@@ -118,16 +119,32 @@ class RC5_read:
 
         # got a full send
         if self.bits == 14:
-            sys.stdout.write(chr(self.code & COMMAND_MASK))
-            sys.stdout.flush()
+#            sys.stdout.write(chr(self.code & COMMAND_MASK))
+#            sys.stdout.flush()
+            self.q.put(chr(self.code & COMMAND_MASK))
             self.reset()
 
 def main():
-     pi = pigpio.pi('localhost', 9999)
-     r = RC5_read(pi, 3)
+    hit = 0
+    q = queue.Queue()
+    pi = pigpio.pi('localhost', 9999)
+    r2 = RC5_read(pi, 17, q)
+    r = RC5_read(pi, 27, q)
+    pi.write(22, 0)
 
-     while True:
-          time.sleep(1)
+    while True:
+        while not q.empty():
+            msg = q.get()
+            if msg == 'A':
+                print("HIT!")
+                hit = time.time()
+        if time.time() - hit < 5:
+            print('high')
+            pi.write(22, 1)
+        else:
+            pi.write(22, 0)
+
+        time.sleep(0.1)
 
 if __name__ == "__main__":
      main()

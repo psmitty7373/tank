@@ -20,11 +20,11 @@ def carrier(gpio, frequency, micros, dutycycle=0.25):
     return wf
 
 class RC5:
-    def __init__(self, pi, gpio, address=0):
+    def __init__(self, pi, gpio, address=0, freq=37900, mark=889, space=889, duty=0.25):
         self.pi = pi
         self.gpio = gpio
         self.address = address & 15
-        self.bip = bip(pi, gpio, 37900, 889, 889, True)
+        self.bip = bip(pi, gpio, freq, mark, space, True, duty=duty)
 
     def set_address(self, address):
         self.address = address & 15
@@ -34,6 +34,9 @@ class RC5:
         self.pi.wave_chain(chain)
 
     def send(self, command):
+        if self.pi.wave_tx_busy():
+            print('busy')
+            return 0
         command &= 255
 
         data = (3<<12) | (self.address << 8) | command
@@ -51,8 +54,9 @@ class bip:
         pi.wave_add_new()
 
         # mark
-        pi.wave_add_generic(carrier(gpio, freq, mark, duty))
-        #pi.wave_add_generic([pigpio.pulse(1 << gpio, 0, space)])
+        print(freq,mark,space)
+        #pi.wave_add_generic(carrier(gpio, freq, mark, duty))
+        pi.wave_add_generic([pigpio.pulse(1 << gpio, 0, space)])
         self.w_mark = pi.wave_create()
 
         # space
@@ -79,6 +83,17 @@ class bip:
         if self.w_space is not None:
             self.pi.wave_delete(self.w_space)
             self.w_space = None
+
+class tank_id:
+    def __init__(self, pi, gpio):
+        self.pi = pi
+        self.pi.wave_clear()
+        self.sender = RC5(pi, gpio, freq=20, mark=50000, space=50000, duty=1)
+        self.sender.set_address(5)
+
+    def send(self, value):
+        self.sender.send(value)
+        return 1
 
 class laser:
     def __init__(self, pi, gpio):
