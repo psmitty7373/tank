@@ -40,6 +40,7 @@ class RC5:
         command &= 255
 
         data = (3<<12) | (self.address << 8) | command
+        print(bin(data))
         self.send_raw(data, 14)
 
     def cancel(self):
@@ -55,8 +56,10 @@ class bip:
 
         # mark
         print(freq,mark,space)
-        #pi.wave_add_generic(carrier(gpio, freq, mark, duty))
-        pi.wave_add_generic([pigpio.pulse(1 << gpio, 0, space)])
+        if duty == 1.0:
+            pi.wave_add_generic([pigpio.pulse(1 << gpio, 0, mark)])
+        else:
+            pi.wave_add_generic(carrier(gpio, freq, mark, duty))
         self.w_mark = pi.wave_create()
 
         # space
@@ -83,17 +86,6 @@ class bip:
         if self.w_space is not None:
             self.pi.wave_delete(self.w_space)
             self.w_space = None
-
-class tank_id:
-    def __init__(self, pi, gpio):
-        self.pi = pi
-        self.pi.wave_clear()
-        self.sender = RC5(pi, gpio, freq=20, mark=50000, space=50000, duty=1)
-        self.sender.set_address(5)
-
-    def send(self, value):
-        self.sender.send(value)
-        return 1
 
 class laser:
     def __init__(self, pi, gpio):

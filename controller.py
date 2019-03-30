@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 
-import BNO055, json, math, multiprocessing, pickle, pigpio, pfilter, os, signal, struct, time
+import BNO055, json, math, pickle, pigpio, pfilter, os, signal, struct, time
+from multiprocessing import Process
+from multiprocessing import Queue
 from functools import partial
 from statistics import median
 import tornado.ioloop
@@ -15,11 +17,11 @@ left_pwm_r = 24
 
 min_throttle = 50.0
 
-serial_port_enabled = True
+serial_port_enabled = False
 serial_port_mode = "UWB"
 serial_port_baud = 115200
 serial_port = "/dev/serial0"
-imu_enabled = True
+imu_enabled = False
 
 def translate(value, leftMin, leftMax, rightMin, rightMax):
     leftSpan = leftMax - leftMin
@@ -65,7 +67,7 @@ def steering2(x, y):
         l = math.copysign(translate(abs(l), 0, 255, min_throttle, 255), l)
     return (round(r), round(l))
 
-class Tank(multiprocessing.Process):
+class Tank(Process):
     def __init__(self, tasks, results):
         import laser
         super(Tank, self).__init__()
@@ -352,62 +354,73 @@ class Tank(multiprocessing.Process):
             self.pi.serial_close(self.s1)
 
 
-public = os.path.join(os.path.dirname(__file__), 'public')
+class Webserver(Process):
+    def __init__(self, to_tornado, to_main):
+        super(Webserver, self).__init__()
+        self.to_tornado = to_tornado
+        self.to_main = to_main
 
-class MainHandler(tornado.web.RequestHandler):
-    def get(self):
-        self.render("index.html")
+    class MainHandler(tornado.web.RequestHandler):
+        def get(self):
+            self.render("index.html")
 
-class MyStaticFileHandler(tornado.web.StaticFileHandler):
-    def set_extra_headers(self, path):
-        self.set_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+    class MyStaticFileHandler(tornado.web.StaticFileHandler):
+        def set_extra_headers(self, path):
+            self.set_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
 
-class WebSocket(tornado.websocket.WebSocketHandler):
-    connections = set()
+    class WebSocket(tornado.websocket.WebSocketHandler):
+        connections = set()
 
-    def initialize(self, tasks, results):
-        self.tasks = tasks
-        self.results = results
- 
-    def open(self):
-        self.connections.add(self)
- 
-    def on_message(self, msg):
-        msg = json.loads(msg)
-        if msg['t'] == 't':
-            r, l = steering2(msg['x'], msg['y'])
-            self.tasks.put({'task_type': 'throttle_update', 'payload': (r,l)})
-        elif msg['t'] == 'f':
-            self.tasks.put({'task_type': 'fire_weapon'})
-        while not self.results.empty():
-            msg = self.results.get()
-            [client.write_message(json.dumps(msg)) for client in self.connections]
+        def initialize(self, to_tornado, to_main):
+            self.to_tornado = to_tornado
+            self.to_main = to_main
+     
+        def open(self):
+            self.connections.add(self)
+     
+        def on_message(self, msg):
+            msg = json.loads(msg)
+            if msg['t'] == 't':
+                r, l = steering2(msg['x'], msg['y'])
+                self.tasks.put({'task_type': 'throttle_update', 'payload': (r,l)})
+            elif msg['t'] == 'f':
+                self.tasks.put({'task_type': 'fire_weapon'})
+            while not self.results.empty():
+                msg = self.results.get()
+                [client.write_message(json.dumps(msg)) for client in self.connections]
 
-    def on_close(self):
-        self.connections.remove(self)
- 
-def make_app(tasks, results):
-    return tornado.web.Application([
-        (r"/tank_ws", WebSocket, {'tasks': tasks, 'results': results}),
-        (r'/(.*)', MyStaticFileHandler, {'path': public, "default_filename": "index.html"}),
-    ])
+        def on_close(self):
+            self.connections.remove(self)
+
+    def signal_handler(signal, frame):
+        print("Stopping Tornado.")
+        ioloop = tornado.ioloop.IOLoop.instance()
+        ioloop.add_callback(ioloop.stop)
 
 
-def signal_handler(signal, frame):
-    print("Stopping Tornado.")
-    ioloop = tornado.ioloop.IOLoop.instance()
-    ioloop.add_callback(ioloop.stop)
+    def run(self):
+        signal.signal(signal.SIGINT, self.signal_handler)
+
+        public = os.path.join(os.path.dirname(__file__), 'tank_public')
+
+        print('Starting webserver.')
+        self.webapp = tornado.web.Application([
+            (r"/tank_ws", self.WebSocket, {'to_tornado': self.to_tornado, 'to_main': self.to_main }),
+            (r'/(.*)', self.MyStaticFileHandler, {'path': public, "default_filename": "index.html" }),
+        ])
+        self.webapp.listen(8000)
+        tornado.ioloop.IOLoop.current().start()
 
 def main():
-    tasks = multiprocessing.JoinableQueue()
-    results = multiprocessing.Queue(maxsize=2)
-    tank = Tank(tasks, results)
+    to_tornado = Queue()
+    to_tank = Queue()
+    to_main = Queue()
+
+    tank = Tank(to_tank, to_main)
     tank.start()
 
-    webapp = make_app(tasks, results)
-    webapp.listen(8000)
-    signal.signal(signal.SIGINT, signal_handler)
-    tornado.ioloop.IOLoop.current().start()
+    web = Webserver(to_tornado, to_main)
+    web.start()
 
 if __name__ == "__main__":
     main()
