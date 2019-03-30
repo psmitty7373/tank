@@ -153,7 +153,8 @@ class BNO055:
     BNO055_SIC_MATRIX_8_LSB_ADDR             = 0X53
     BNO055_SIC_MATRIX_8_MSB_ADDR             = 0X54
     
-    # Accelerometer Offset registers     
+    # Accelerometer Offset registers
+    BNO055_CALIB_OFFSET_ADDR            = 0x55
     ACCEL_OFFSET_X_LSB_ADDR             = 0X55
     ACCEL_OFFSET_X_MSB_ADDR             = 0X56
     ACCEL_OFFSET_Y_LSB_ADDR             = 0X57
@@ -185,12 +186,10 @@ class BNO055:
 
     # REGISTER DEFINITION END
 
-
     def __init__(self, sensorId=-1, address=0x28):
         self._sensorId = sensorId
         self._address = address
         self._mode = BNO055.OPERATION_MODE_NDOF
-
 
     def begin(self, mode=None):
         if mode is None: mode = BNO055.OPERATION_MODE_NDOF
@@ -211,19 +210,15 @@ class BNO055:
         time.sleep(1)
         while self.readBytes(BNO055.BNO055_CHIP_ID_ADDR)[0] != BNO055.BNO055_ID:
             time.sleep(0.01)
-        time.sleep(0.05)
+        time.sleep(0.65)
 
         # Set to normal power mode
         self.writeBytes(BNO055.BNO055_PWR_MODE_ADDR, [BNO055.POWER_MODE_NORMAL])
-        time.sleep(0.01)
-
         self.writeBytes(BNO055.BNO055_PAGE_ID_ADDR, [0])
         self.writeBytes(BNO055.BNO055_SYS_TRIGGER_ADDR, [0])
-        time.sleep(0.01)
-
+        self.writeBytes(BNO055.BNO055_TEMP_SOURCE_ADDR, [1])
         # Set the requested mode
         self.setMode(mode)
-        time.sleep(0.02)
 
         return True
 
@@ -235,12 +230,26 @@ class BNO055:
     def setExternalCrystalUse(self, useExternalCrystal = True):
         prevMode = self._mode
         self.setMode(BNO055.OPERATION_MODE_CONFIG)
-        time.sleep(0.025)
         self.writeBytes(BNO055.BNO055_PAGE_ID_ADDR, [0])
         self.writeBytes(BNO055.BNO055_SYS_TRIGGER_ADDR, [0x80] if useExternalCrystal else [0])
-        time.sleep(0.01)
         self.setMode(prevMode)
-        time.sleep(0.02)
+        time.sleep(1)
+
+    def setCalibrationData(self, calibrationOffsets):
+        if len(calibrationOffsets) != 22 or max(calibrationOffsets) > 255 or min(calibrationOffsets) < 0:
+            print('blark')
+            return
+        prevMode = self._mode
+        self.setMode(BNO055.OPERATION_MODE_CONFIG)
+        self.writeBytes(BNO055.BNO055_CALIB_OFFSET_ADDR, calibrationOffsets)
+        self.setMode(prevMode)
+
+    def getCalibrationData(self):
+        prevMode = self._mode
+        self.setMode(BNO055.OPERATION_MODE_CONFIG)
+        calData = self.readBytes(BNO055.BNO055_CALIB_OFFSET_ADDR, 22)
+        self.setMode(prevMode)
+        return list(calData)
 
     def getSystemStatus(self):
         self.writeBytes(BNO055.BNO055_PAGE_ID_ADDR, [0])
@@ -255,7 +264,7 @@ class BNO055:
         bl_rev = self.readBytes(BNO055.BNO055_BL_REV_ID_ADDR)[0]
         return (accel_rev, mag_rev, gyro_rev, sw_rev, bl_rev)
 
-    def getCalibration(self):
+    def getCalibrationStatus(self):
         calData = self.readBytes(BNO055.BNO055_CALIB_STAT_ADDR)[0]
         return (calData >> 6 & 0x03, calData >> 4 & 0x03, calData >> 2 & 0x03, calData & 0x03)
 

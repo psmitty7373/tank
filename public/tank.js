@@ -277,6 +277,14 @@ function draw_minimap() {
     }
 
     // draw anchors
+    ctx.strokeStyle = "black";
+    for (i = 0; i < anchors.length; i++) {
+        ctx.beginPath();
+        ctx.moveTo(anchors[i].x, anchors[i].y);
+        ctx.lineTo(anchors[(i + 1) % anchors.length].x, anchors[(i + 1) % anchors.length].y);
+        ctx.stroke();
+    }
+
     for (i = 0; i < anchors.length; i++) {
         if (i == 0)
             ctx.fillStyle = "green";
@@ -286,6 +294,7 @@ function draw_minimap() {
             ctx.fillStyle = "blue";
         ctx.fillRect(anchors[i].x - 2, anchors[i].y - 2, 4, 4);
     }
+
 }
 
 function update(ts) {
@@ -360,16 +369,15 @@ virt_joystick.addEventListener('touchEnd', function(){
     console.log('up')
 });
 
-function send_joystick(j) {
+function send_joystick() {
     if (ws.readyState == 1) {
-        /*
-        pos = { x: j.deltaX(), y: -j.deltaY() };
+        pos = { x: virt_joystick.deltaX(), y: -virt_joystick.deltaY() };
         pos.x = pos.x / 100;
         pos.y = pos.y / 100;
         x = Math.round(0.5 * Math.sqrt(2 + Math.pow(pos.x, 2) - Math.pow(pos.y, 2) + 2 * pos.x * Math.sqrt(2)) - 0.5 * Math.sqrt(2 + Math.pow(pos.x, 2) - Math.pow(pos.y, 2) - 2 * pos.x * Math.sqrt(2)));
         y = Math.round(0.5 * Math.sqrt(2 - Math.pow(pos.x, 2) + Math.pow(pos.y, 2) + 2 * pos.y * Math.sqrt(2)) - 0.5 * Math.sqrt(2 - Math.pow(pos.x, 2) + Math.pow(pos.y, 2) - 2 * pos.y * Math.sqrt(2)));
-        pos.t = 't';
-        */
+        joystick.x = pos.x;
+        joystick.y = pos.y;
         let msg = { t: 't', x: joystick.x, y: joystick.y };
         ws.send(JSON.stringify(msg));
     }

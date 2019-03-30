@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import BNO055, json, math, multiprocessing, pigpio, pfilter, os, signal, struct, time
+import BNO055, json, math, multiprocessing, pickle, pigpio, pfilter, os, signal, struct, time
 from functools import partial
 from statistics import median
 import tornado.ioloop
@@ -15,7 +15,7 @@ left_pwm_r = 24
 
 min_throttle = 50.0
 
-serial_port_enabled = False
+serial_port_enabled = True
 serial_port_mode = "UWB"
 serial_port_baud = 115200
 serial_port = "/dev/serial0"
@@ -83,6 +83,7 @@ class Tank(multiprocessing.Process):
         self.weapon_ready = True
 
         if serial_port_enabled:
+            print("Opening serial port.")
             self.s1 = self.pi.serial_open(serial_port, serial_port_baud)
         else:
             self.s1 = None
@@ -94,6 +95,11 @@ class Tank(multiprocessing.Process):
                 print("Error initializing device")
                 return False
             self.bno.setExternalCrystalUse(True)
+            if os.path.isfile('imu.conf'):
+                print("Loaded imu.conf")
+                with open('imu.conf','rb') as f:
+                    cd = pickle.load(f)
+                    self.bno.setCalibrationData(cd)
         else:
             self.bno = None
 
@@ -118,6 +124,7 @@ class Tank(multiprocessing.Process):
 
         # timers
         self.brake_time = 100
+        self.temp_time = time.time() * 1000
         self.failsafe_time = time.time() * 1000
         self.heartbeat_time = time.time() * 1000
         self.weapon_reload_time = 0
@@ -164,6 +171,7 @@ class Tank(multiprocessing.Process):
             self.process_rlv_pkt({ 'rlv_type': rlv_type, 'rlv_payload': rlv_payload })
 
     def process_rlv_pkt(self, pkt):
+        print(pkt)
         if pkt['rlv_type'] == 0:
             return
         elif pkt['rlv_type'] == 0x5a:
@@ -206,7 +214,7 @@ class Tank(multiprocessing.Process):
                 if curr_time - self.weapon_reload_time > 5000:
                     self.weapon_ready = True
 
-            # UWB
+            # UWB --------------------------------------------------------------------
             # poll uwb serial port
             self.update_uwb()
 
@@ -218,9 +226,17 @@ class Tank(multiprocessing.Process):
                 #self.pf.update()
                 self.ppos_x, self.ppos_y, self.ppos_z = self.pf.getEstimate()
 
+            # IMU --------------------------------------------------------------------
             # poll imu
             if imu_enabled and self.bno:
                 self.azim_x, self.azim_y, self.azim_z = self.bno.getVector(BNO055.BNO055.VECTOR_EULER)
+                calib = self.bno.getCalibrationStatus()
+                if curr_time - self.temp_time > 30000:
+                    if calib[0] == 3 and calib[1] == 3 and calib[3] == 3:
+                        cd = self.bno.getCalibrationData()
+                        with open('imu.conf', 'wb') as f:
+                            pickle.dump(cd, f)
+                        self.temp_time = curr_time
 
             while not self.tasks.empty():
                 self.failsafe_time = curr_time
