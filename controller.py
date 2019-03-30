@@ -68,7 +68,7 @@ def steering2(x, y):
     return (round(r), round(l))
 
 class Tank(Process):
-    def __init__(self, tasks, results):
+    def __init__(self, to_tank, to_main):
         import laser
         super(Tank, self).__init__()
         
@@ -148,8 +148,8 @@ class Tank(Process):
         self.azim_z = 0
 
         # messaging
-        self.tasks = tasks
-        self.results = results
+        self.to_tank = to_tank
+        self.to_main = to_main
 
         #particle filter
         self.pf = pfilter.ParticleFilter(200, 0.1, (10, 10, 10))
@@ -240,9 +240,9 @@ class Tank(Process):
                             pickle.dump(cd, f)
                         self.temp_time = curr_time
 
-            while not self.tasks.empty():
+            while not self.to_tank.empty():
                 self.failsafe_time = curr_time
-                task = self.tasks.get()
+                task = self.to_tank.get()
                 if task['task_type'] == "throttle_update":
                     self.r_t, self.l_t = task['payload']
                 elif task['task_type'] == "fire_weapon":
@@ -344,9 +344,9 @@ class Tank(Process):
                         self.pi.set_PWM_dutycycle(right_pwm_f, 0)
                         self.pi.set_PWM_dutycycle(right_pwm_r, abs(self.r_t))
             #send current status
-            if not self.results.full() and time.time() * 1000 - self.heartbeat_time > 100:
+            if not self.to_main.full() and time.time() * 1000 - self.heartbeat_time > 100:
                 self.heartbeat_time = time.time() * 1000
-                self.results.put({ 'current': self.current, 'volts': self.volts, 'l_t': self.l_t, 'r_t': self.r_t, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
+                self.to_main.put({ 'current': self.current, 'volts': self.volts, 'l_t': self.l_t, 'r_t': self.r_t, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
             time.sleep(0.01)
 
         print("Shutting down...")
@@ -382,21 +382,19 @@ class Webserver(Process):
             msg = json.loads(msg)
             if msg['t'] == 't':
                 r, l = steering2(msg['x'], msg['y'])
-                self.tasks.put({'task_type': 'throttle_update', 'payload': (r,l)})
+                self.to_main.put({'task_type': 'throttle_update', 'payload': (r,l)})
             elif msg['t'] == 'f':
-                self.tasks.put({'task_type': 'fire_weapon'})
-            while not self.results.empty():
-                msg = self.results.get()
+                self.to_main.put({'task_type': 'fire_weapon'})
+            while not self.to_tornado.empty():
+                msg = self.to_tornado.get()
                 [client.write_message(json.dumps(msg)) for client in self.connections]
 
         def on_close(self):
             self.connections.remove(self)
 
-    def signal_handler(signal, frame):
+    def signal_handler(self, signal, frame):
         print("Stopping Tornado.")
-        ioloop = tornado.ioloop.IOLoop.instance()
-        ioloop.add_callback(ioloop.stop)
-
+        tornado.ioloop.IOLoop.current().stop()
 
     def run(self):
         signal.signal(signal.SIGINT, self.signal_handler)
