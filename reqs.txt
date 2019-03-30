@@ -1,6 +1,7 @@
 python3-pip
-pigpio
+pigpio, asyncio, websockets
 python3-pigpio
 python3-numpy
 python3-tornado
 python3-smbus
+python3-asyncio

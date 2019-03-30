@@ -1,8 +1,10 @@
 #!/usr/bin/python3
 
-import datetime, json, math, multiprocessing, pigpio, os, signal, struct, time
+import base64, cv2, datetime, imutils, json, math, numpy as np, os, pickle, pigpio, random, signal, struct, time
+from multiprocessing import Process, Manager, Queue, set_start_method
+from multiprocessing.managers import BaseManager
+from imutils import contours
 from pykalman import KalmanFilter
-import numpy as np
 from statistics import median
 import tornado.ioloop
 import tornado.web as web
@@ -13,6 +15,8 @@ serial_port_mode = "UWB"
 serial_port_baud = 115200
 serial_port = "/dev/serial0"
 
+camera_enabled = True
+
 transition_matrix = [[1, 1, 0, 0],
                      [0, 1, 0, 0],
                      [0, 0, 1, 1],
@@ -21,33 +25,221 @@ transition_matrix = [[1, 1, 0, 0],
 observation_matrix = [[1, 0, 0, 0],
                       [0, 0, 1, 0]]
 
-class UWB(multiprocessing.Process):
-    def __init__(self, tasks, results):
-        super(UWB, self).__init__()
+def translate(value, leftMin, leftMax, rightMin, rightMax):
+    leftSpan = leftMax - leftMin
+    rightSpan = rightMax - rightMin
+    valueScaled = float(value - leftMin) / float(leftSpan)
+    return rightMin + (valueScaled * rightSpan)
 
+class Game(object):
+    def __init__(self):
+        self.tanks = {}
+
+    def add_tank(self, x=0, y=0, tid=0):
+        if tid in self.tanks.keys():
+            return
+        self.tanks[tid] = { 'pos': [x ,y], 'last_update': time.time(), 'last_poll': time.time() }
+
+    def touch_tank(self, tid):
+        if tid in self.tanks.keys():
+            self.tanks[tid]['last_update'] = time.time()
+
+    def cleanup_tanks(self):
+        now = time.time()
+        for t in self.tanks.keys():
+            if now - self.tanks[t]['last_update'] > 30:
+                print('removing tank', t)
+                self.tanks.pop(t, None)
+
+    def update_tank_pos(self, tid, pos):
+        if tid in self.tanks.keys():
+            self.tanks[tid]['pos'] = pos
+
+    def get_oldest_poll_tid(self):
+        old_time = time.time() - 10
+        old_tank = None
+        for t in self.tanks.keys():
+            if self.tanks[t]['last_poll'] < old_time:
+                old_tank = t
+                old_time = self.tanks[t]['last_poll']
+        if not old_tank == None:
+            self.tanks[t]['last_poll'] = time.time()
+        return old_tank
+
+    def get_tanks(self):
+        return json.dumps(self.tanks)
+
+    def find_tank(self, pos):
+        found = False
+        for t in self.tanks:
+            is_close = np.isclose(t.pos, pos, 0.2)
+            if is_close[0] and is_close[1]:
+                return t
+        return found
+
+
+class Location_Cam(Process):
+    def __init__(self, to_cam, to_main, g):
+        super(Location_Cam, self).__init__()
+        self.to_cam = to_cam
+        self.to_main = to_main
+        self.g = g
+
+    def update_bitstreams(self):
+        for b in self.bitstreams:
+            if len(b['stream']) == 80 and sum(b['stream']) == 0:
+                self.bitstreams.remove(b)
+                continue
+
+            long_avg = float(b['seen_count']) / b['poll_count']
+            short_avg = float(sum(b['stream'])) / len(b['stream'])
+
+#            print(b['bid'], b['stream'], b['confidence'], long_avg, short_avg)
+
+            if b['poll_count'] > 400 and long_avg > 0.4 and long_avg < .6:
+                if b['confidence'] < 1:
+                    b['confidence'] = 1
+            else:
+                b['confidence'] = 0
+
+            if b['confidence'] > 0 and self.polling and short_avg < 0.40:
+                print('found tank, probably...')
+                b['confidence'] = 2
+                b['tid'] = self.polling
+                self.polling = False
+
+            b['stream'].append(0)
+            if not self.polling:
+                b['poll_count'] += 1
+            b['stream'] = b['stream'][-80:]
+
+    def find_and_set_bitstream(self, pos):
+        for b in self.bitstreams:
+            is_close = np.isclose(b['pos'], pos, 0.2)
+            if is_close[0] and is_close[1]:
+                b['pos'] = pos
+                b['stream'][-1] = 1
+                if not self.polling:
+                    b['seen_count'] += 1
+                if b['tid'] > -1:
+                    tank_pos = [ translate(pos[0], self.calibration_data['tl'][0], self.calibration_data['tr'][0], 0, 200),
+                            translate(pos[1], self.calibration_data['tl'][1], self.calibration_data['bl'][1], 0, 200) ]
+                    self.g.update_tank_pos(b['tid'], tank_pos)
+                return
+        self.bitstreams.append({'pos': pos, 'stream': [0], 'seen_count': 1, 'poll_count': 1, 'tid': -1, 'confidence': 0})
+
+    def shutdown(self, signal, frame):
+        print("Stopping camera.")
+        self.running = False
+
+    def get_cam(self):
+        ret, image = self.cam.read()
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        self.to_main.put({'t': 'cam', 'image': base64.b64encode(cv2.imencode('.png', gray)[1].tostring()).decode('ascii')})
+
+    def calibrate_arena(self, corners):
+        self.calibration_data = corners
+        with open('arena.conf', 'wb') as f:
+            pickle.dump(self.calibration_data, f)
+
+    def track_tanks(self):
+        self.update_bitstreams()
+        ret, image = self.cam.read()
+        now = time.time()
+
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        thresh = cv2.threshold(gray, 210, 255, cv2.THRESH_BINARY)[1]
+#        thresh = cv2.erode(thresh, None, iterations=2)
+#        thresh = cv2.dilate(thresh, None, iterations=4)
+        cnts = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        cnts = imutils.grab_contours(cnts)
+        found = False
+        if len(cnts) > 0:
+            for (i, c) in enumerate(cnts):
+                found = True
+                ((cX, cY), radius) = cv2.minEnclosingCircle(c)
+                if radius > 1.5 and radius < 7.0 and cX >= self.calibration_data['tl'][0] and cX <= self.calibration_data['tr'][0] and cY >= self.calibration_data['tl'][1] and cY <= self.calibration_data['bl'][1]:
+#                    cv2.circle(image, (int(cX), int(cY)), int(radius), (0, 0, 255), 1)
+#                    cv2.putText(image, "#{}".format(i + 1), (int(cX), int(cY) - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1)
+                    self.find_and_set_bitstream([cX, cY])
+
+        self.tot_time += now - self.last_frame
+        self.frames += 1
+        self.last_frame = now
+
+        if now - self.last_show > 5:
+#            cv2.imshow("hsv", thresh)
+            print(1 / (self.tot_time / self.frames))
+            self.last_show = now
+
+#        if cv2.waitKey(1) == 27:
+#            return
+
+    def run(self):
         self.running = True
 
         # init signal handler
         signal.signal(signal.SIGINT, self.shutdown)
 
-        #init pigpio
-        self.pi = pigpio.pi('localhost')
+        # setup camera
+        self.cam = cv2.VideoCapture(0)
+        self.cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.cam.set(cv2.CAP_PROP_FPS, 40)
+        time.sleep(1)
 
-        if serial_port_enabled:
-            self.s1 = self.pi.serial_open(serial_port, serial_port_baud)
+        self.polling = False
+        self.bitstreams = []
+
+        self.tot_time = 0
+        self.frames = 0
+        self.last_frame = time.time()
+        self.last_show = time.time()
+
+        if os.path.isfile('arena.conf'):
+            print("Loaded arena.conf.")
+            with open('arena.conf','rb') as f:
+                cd = pickle.load(f)
+                self.calibration_data = cd
         else:
-            self.s1 = None
+            self.calibration_data = {'tl': [0,0], 'tr': [640,0], 'bl': [0, 480], 'br': [640, 480]}
 
-        #timers
-        self.heartbeat_time = time.time() * 1000
-        self.position_time = time.time() * 1000
+        print("Camera started.")
+        #cv2.namedWindow('hsv')
+        poll_time = time.time()
+        while self.running:
+            now = time.time()
+            if now - poll_time > 5:
+                if self.polling:
+                    print('stopped polling')
+                    self.polling = False
+                else:
+                    poll_time = now
+                    old_tid = self.g.get_oldest_poll_tid()
+                    print('polling for: ', old_tid)
+                    if not old_tid == None:
+                        self.polling = old_tid
+                        self.to_main.put({'t': 'poll', 'tid': old_tid})
 
-        # messaging
-        self.tasks = tasks
-        self.results = results
-        self.tanks = {}
+            self.track_tanks()
+
+            while not self.to_cam.empty():
+                msg = self.to_cam.get()
+                if msg['t'] == 'get_cam':
+                    self.get_cam()
+                elif msg['t'] == 'calibrate':
+                    self.calibrate_arena(msg['corners'])
+
+        cv2.destroyAllWindows()
+
+class UWB(Process):
+    def __init__(self, to_uwb, to_main):
+        super(UWB, self).__init__()
+        self.to_uwb = to_uwb
+        self.to_main = to_main
 
     def shutdown(self, signal, frame):
+        print('Stopping UWB.')
         self.running = False
 
     def enable_shell_mode(self):
@@ -112,8 +304,8 @@ class UWB(multiprocessing.Process):
                 self.tanks[tank_id]['posm_y'] = self.tanks[tank_id]['posm_y'][-5:]
                 self.tanks[tank_id]['posm_z'] = self.tanks[tank_id]['posm_z'][-5:]
 
-            #self.results.put({ 'id': tank_id, 'x': median(self.tanks[tank_id]['posm_x']), 'y': median(self.tanks[tank_id]['posm_y']), 'z': median(self.tanks[tank_id]['posm_z']) })
-            self.results.put({ 'id': tank_id, 'x': x, 'y': y, 'z': median(self.tanks[tank_id]['posm_z']) })
+            #self.to_main.put({ 'id': tank_id, 'x': median(self.tanks[tank_id]['posm_x']), 'y': median(self.tanks[tank_id]['posm_y']), 'z': median(self.tanks[tank_id]['posm_z']) })
+            self.to_main.put({ 't': 'pos', 'id': tank_id, 'x': x, 'y': y, 'z': median(self.tanks[tank_id]['posm_z']) })
 
     def shell_recv(self):
         if self.s1 == None:
@@ -128,8 +320,23 @@ class UWB(multiprocessing.Process):
                 self.process_shell_pkt(pkt)
 
     def run(self):
-        print("Running!")
+        self.running = True
+        signal.signal(signal.SIGINT, self.shutdown)
+        
+        self.heartbeat_time = time.time() * 1000
+        self.position_time = time.time() * 1000
+
+        self.tanks = {}
+
+        self.pi = pigpio.pi('localhost')
+
+        if serial_port_enabled and serial_port_mode == "UWB":
+            self.s1 = self.pi.serial_open(serial_port, serial_port_baud)
+        else:
+            self.s1 = None
+
         self.enable_shell_mode()
+        print("Running!")
         while self.running:
             curr_time = time.time() * 1000
             self.shell_recv()
@@ -138,72 +345,153 @@ class UWB(multiprocessing.Process):
             if curr_time - self.position_time > 100:
                 self.position_time = curr_time
 
-            while not self.tasks.empty():
+            while not self.to_uwb.empty():
                 self.failsafe_time = curr_time
-                task = self.tasks.get()
-                if task['task_type'] == "shutdown":
+                msg = self.to_uwb.get()
+                if msg['t'] == "shutdown":
                     self.running = False
 
                 #semd status back
-                if not self.results.full() and time.time() * 1000 - self.heartbeat_time > 200:
+                if not self.to_main.full() and time.time() * 1000 - self.heartbeat_time > 200:
                     self.heartbeat_time = time.time() * 1000
-            time.sleep(0.1)
+            time.sleep(0.01)
 
-        print("Shutting down...")
+        print("Stopping UWB.")
         self.pi.serial_close(self.s1)
 
-public = os.path.join(os.path.dirname(__file__), 'server')
+class webserver(Process):
+    def __init__(self, to_tornado, to_main, g):
+        super(webserver, self).__init__()
+        self.to_tornado = to_tornado
+        self.to_main = to_main
+        self.g = g
 
-class MainHandler(tornado.web.RequestHandler):
-    def get(self):
-        self.render("index.html")
+    class MainHandler(tornado.web.RequestHandler):
+        def get(self):
+            self.render("index.html")
 
-class MyStaticFileHandler(tornado.web.StaticFileHandler):
-    def set_extra_headers(self, path):
-        self.set_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+    class MyStaticFileHandler(tornado.web.StaticFileHandler):
+        def set_extra_headers(self, path):
+            self.set_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
 
-class WebSocket(tornado.websocket.WebSocketHandler):
-    connections = set()
+    class WebSocket(tornado.websocket.WebSocketHandler):
+        connections = set()
 
-    def initialize(self, tasks, results):
-        self.tasks = tasks
-        self.results = results
-        tornado.ioloop.PeriodicCallback(self.flush_queue, 100).start()
+        def initialize(self, to_tornado, to_main, g):
+            self.to_tornado = to_tornado
+            self.to_main = to_main
+            self.g = g
+            self.last_update = time.time()
+            tornado.ioloop.PeriodicCallback(self.update_sockets, 50).start()
 
-    def flush_queue(self):
-        while not self.results.empty():
-            msg = self.results.get()
-            [client.write_message(json.dumps(msg)) for client in self.connections]
- 
-    def open(self):
-        self.connections.add(self)
- 
-    def on_message(self, message):
-        pos = json.loads(message)
+        def update_sockets(self):
+            if time.time() - self.last_update > 1:
+                self.last_update = time.time()
+                tanks = self.g.get_tanks()
+                for client in self.connections:
+                    if client.type == 'server':
+                        client.write_message(json.dumps({'t': 'update', 'tanks': tanks}))
 
-    def on_close(self):
-        self.connections.remove(self)
- 
-def make_app(tasks, results):
-    return tornado.web.Application([
-        (r"/ws", WebSocket, {'tasks': tasks, 'results': results}),
-        (r'/(.*)', MyStaticFileHandler, {'path': public, "default_filename": "index.html"}),
-    ])
+            while not self.to_tornado.empty():
+                msg = self.to_tornado.get()
+                for client in self.connections:
+                    if 'tid' in msg.keys() and client.tid == msg['tid']:
+                        client.write_message(json.dumps(msg))
+                    elif 'tid' not in msg.keys() and client.type == 'server':
+                        client.write_message(json.dumps(msg))
 
+     
+        def open(self):
+            self.type = 'unk'
+            self.tid = -1
+            self.connections.add(self)
+     
+        def on_message(self, message):
+            msg = json.loads(message)
 
-def signal_handler(signal, frame):
-    tornado.ioloop.IOLoop.current().stop()
+            if msg['t'] == 'join':
+                print('adding tank', msg['tid'])
+                self.tid = msg['tid']
+                self.type = 'tank'
+                self.g.add_tank(tid=msg['tid'], x=0, y=0)
+
+            if msg['t'] == 'server':
+                self.type = 'server'
+
+            elif msg['t'] == 'hb':
+                self.g.touch_tank(msg['tid'])
+
+            else:
+                self.to_main.put(msg)
+
+        def on_close(self):
+            self.connections.remove(self)
+
+    def signal_handler(self, signal, frame):
+        print('Stopping webserver.')
+        tornado.ioloop.IOLoop.current().stop()
+
+    def run(self):
+        signal.signal(signal.SIGINT, self.signal_handler)
+
+        public = os.path.join(os.path.dirname(__file__), 'server_public')
+
+        print('Starting webserver.')
+        self.webapp = tornado.web.Application([
+            (r"/ws", self.WebSocket, {'to_tornado': self.to_tornado, 'to_main': self.to_main, 'g': self.g }),
+            (r'/(.*)', self.MyStaticFileHandler, {'path': public, "default_filename": "index.html"}),
+        ])
+        self.webapp.listen(8000)
+        tornado.ioloop.IOLoop.current().start()
+
 
 def main():
-    tasks = multiprocessing.JoinableQueue()
-    results = multiprocessing.Queue(maxsize=64)
-    uwb = UWB(tasks, results)
-    uwb.start()
+    running = True
 
-    webapp = make_app(tasks, results)
-    webapp.listen(8000)
-    signal.signal(signal.SIGINT, signal_handler)
-    tornado.ioloop.IOLoop.current().start()
+    set_start_method("spawn")
+
+    BaseManager.register('Game', Game)
+    manager = BaseManager()
+    manager.start()
+    g = manager.Game()
+
+    #g = Game()
+
+    to_uwb = Queue()
+    to_cam = Queue()
+    to_tornado = Queue()
+    to_main = Queue(maxsize=64)
+
+    #start uwb
+    #if serial_port_enabled and serial_port_mode == "UWB":
+    #    uwb = UWB(to_uwb, to_main)
+    #    uwb.start()
+
+    #start camera
+    if camera_enabled:
+        cam = Location_Cam(to_cam, to_main, g)
+        cam.start()
+
+    #start webserver
+    web = webserver(to_tornado, to_main, g)
+    web.start()
+
+    print('Starting main loop.')
+    while running:
+        try:
+            while not to_main.empty():
+                msg = to_main.get()
+                if msg['t'] == 'poll':
+                    to_tornado.put(msg)
+                elif msg['t'] == 'get_cam' or msg['t'] == 'calibrate':
+                    to_cam.put(msg)
+                elif msg['t'] == 'cam':
+                    to_tornado.put(msg)
+            time.sleep(0.01)
+        except KeyboardInterrupt:
+            running = False
+            continue
+    print('Shutdown.')
 
 if __name__ == "__main__":
     main()
