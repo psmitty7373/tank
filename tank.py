@@ -14,6 +14,9 @@ from tornado import gen
 from threading import Thread
 from uuid import getnode as get_mac
 
+running = True
+
+# settings
 right_pwm_f = 17
 right_pwm_r = 27
 
@@ -27,6 +30,7 @@ serial_port_mode = "UWB"
 serial_port_baud = 115200
 serial_port = "/dev/serial0"
 imu_enabled = True
+server_url = "ws://192.168.97.130:8000/ws"
 
 ID = int(md5(str(hex(get_mac())).encode('ascii')).hexdigest()[0:6], 16)
 
@@ -36,7 +40,7 @@ def translate(value, leftMin, leftMax, rightMin, rightMax):
     valueScaled = float(value - leftMin) / float(leftSpan)
     return rightMin + (valueScaled * rightSpan)
 
-def steering2(x, y):
+def steering(x, y):
     if y >= 0: # forward
         if x >= 0: # right
             premix_l = 1.0
@@ -163,6 +167,11 @@ class Tank(Process):
                     self.bno.setCalibrationData(cd)
         else:
             self.bno = None
+
+        #init transponder
+        self.trans = Transponder(self.pi, 26)
+        self.trans.beacon()
+        self.pi.write(26,1)
 
         #right
         self.pi.set_mode(right_pwm_f, pigpio.OUTPUT)
@@ -361,30 +370,55 @@ class Tank(Process):
                 self.to_tornado.put({ 't': 'status', 'current': self.current, 'volts': self.volts, 'l_t': self.l_t, 'r_t': self.r_t, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
             time.sleep(0.01)
 
-        print("Shutting down...")
         if serial_port_enabled:
             self.pi.serial_close(self.s1)
+        print('Tank done.')
+        self.pi.stop()
+
+
+class Transponder:
+    def __init__(self, pi, gpio, fps=40, clear=False):
+        self.pi = pi
+        if clear:
+            self.pi.wave_clear()
+        pi.wave_add_new()
+        pi.wave_add_generic([pigpio.pulse(1 << gpio, 0, 25000)])
+        self.w_mark = pi.wave_create()
+        pi.wave_add_generic([pigpio.pulse(0, 1 << gpio, 25000)])
+        self.w_space = pi.wave_create()
+
+    def beacon(self):
+        chain = [255, 0] + [self.w_mark,  self.w_space] + [255, 3]
+        self.pi.wave_chain(chain)
+
+    def ident(self):
+        chain = [255, 0] + [self.w_mark] * 2 + [self.w_space] * 8 + [255, 1, 8, 0] + [255, 0] + [self.w_mark] * 5 + [self.w_space] * 5 + [255, 3]
+        self.pi.wave_chain(chain)
 
 
 class WebsocketClient(Thread):
-    def __init__(self):
+    def __init__(self, to_client, to_main):
         super(WebsocketClient, self).__init__()
         self.ioloop = tornado.ioloop.IOLoop.instance()
         self.ws = None
+        self.to_client = to_client
+        self.to_main = to_main
         self.connect()
-        tornado.ioloop.PeriodicCallback(self.keep_alive, 1000).start()
+        tornado.ioloop.PeriodicCallback(self.update_socket, 1000).start()
         self.ioloop.start()
 
     @gen.coroutine
     def connect(self):
-        print("trying to connect")
+        global running
         try:
-            self.ws = yield tornado.websocket.websocket_connect('ws://192.168.97.130:8000/ws', on_message_callback=self.on_message)
+            self.ws = yield tornado.websocket.websocket_connect(server_url, on_message_callback=self.on_message)
         except:
-            time.sleep(2)
-            self.connect()
+            if running:
+                time.sleep(2)
+                self.connect()
+            else:
+                self.ioloop.stop()
         else:
-            print("connected")
             self.send(json.dumps({ 't':'join', 'tid': ID }))
 
     def on_message(self, msg):
@@ -402,8 +436,16 @@ class WebsocketClient(Thread):
             return True
         return False
 
-    def keep_alive(self):
-        self.send(json.dumps({ 't': 'hb', 'tid': ID }))
+    def stop(self):
+        self.ioloop.stop()
+
+    def update_socket(self):
+        global running
+        if running:
+            self.send(json.dumps({ 't': 'hb', 'tid': ID }))
+        else:
+            print('Stopping websocket client.')
+            self.ioloop.stop()
 
 
 class Webserver(Process):
@@ -422,38 +464,33 @@ class Webserver(Process):
             self.set_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
 
     class WebSocket(tornado.websocket.WebSocketHandler):
-        connections = set()
 
-        def initialize(self, to_tornado, to_tank, to_main, running):
+        def initialize(self, to_tornado, to_tank, to_main, connections):
             self.to_tornado = to_tornado
             self.to_main = to_main
             self.to_tank = to_tank
-            self.running = running
-            tornado.ioloop.PeriodicCallback(self.update_sockets, 100).start()
+            self.connections = connections
 
-        def update_sockets(self):
-            if not self.running:
-                self.close()
-
-        def close(self):
-            [client.close() for client in self.connections]
-     
         def open(self):
             self.connections.add(self)
      
         def on_message(self, msg):
             msg = json.loads(msg)
             if msg['t'] == 't':
-                r, l = steering2(msg['x'], msg['y'])
-                self.to_tank.put({'t': 'throttle', 'throttle': (r,l)})
+                r, l = steering(msg['x'], msg['y'])
+                self.to_tank.put({ 't': 'throttle', 'throttle': (r,l) })
             elif msg['t'] == 'f':
-                self.to_tank.put({'t': 'fire_weapon'})
+                self.to_tank.put({ 't': 'fire_weapon' })
             while not self.to_tornado.empty():
                 msg = self.to_tornado.get()
                 [client.write_message(json.dumps(msg)) for client in self.connections]
 
         def on_close(self):
             self.connections.remove(self)
+
+    def update_socket(self):
+        if not self.running:
+            [client.close() for client in self.connections]
 
     def signal_handler(self, signal, frame):
         print("Stopping Tornado.")
@@ -465,42 +502,49 @@ class Webserver(Process):
         print('Starting webserver.')
         signal.signal(signal.SIGINT, self.signal_handler)
 
+        self.connections = set()
+
         public = os.path.join(os.path.dirname(__file__), 'tank_public')
 
         self.webapp = tornado.web.Application([
-            (r"/tank_ws", self.WebSocket, {'to_tornado': self.to_tornado, 'to_main': self.to_main, 'to_tank': self.to_tank, 'running': self.running }),
+            (r"/tank_ws", self.WebSocket, {'to_tornado': self.to_tornado, 'to_main': self.to_main, 'to_tank': self.to_tank, 'connections': self.connections }),
             (r'/(.*)', self.MyStaticFileHandler, {'path': public, "default_filename": "index.html" }),
         ])
 
         self.webapp.listen(8000)
+        tornado.ioloop.PeriodicCallback(self.update_socket, 1000).start()
         tornado.ioloop.IOLoop.current().start()
 
+def signal_handler(signal, frame):
+    global running
+    print("Stopping.")
+    running = False
+    return
+
 def main():
-    running = True
+    print('Starting Tank 1.0.')
+    signal.signal(signal.SIGINT, signal_handler)
 
     set_start_method('spawn')
 
     to_tornado = Queue()
     to_tank = Queue()
-    to_main = Queue()
+    to_client = Queue()
+    to_main =Queue()
 
+    # multiprocs
     tank = Tank(to_tank, to_tornado, to_main)
     tank.start()
 
     web = Webserver(to_tornado, to_tank, to_main)
     web.start()
 
-    cs = WebsocketClient()
+    # threads
+    cs = WebsocketClient(to_client, to_main)
     cs.start()
+    cs.join()
 
-    while running == True:
-        try:
-            time.sleep(0.1)
-        except KeyboardInterrupt:
-            running = False
-            continue
-
-    print('Shutting down.')
+    print('Shut down.')
 
 if __name__ == "__main__":
     main()
