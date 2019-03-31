@@ -35,12 +35,10 @@ class RC5:
 
     def send(self, command):
         if self.pi.wave_tx_busy():
-            print('busy')
             return 0
         command &= 255
 
         data = (3<<12) | (self.address << 8) | command
-        print(bin(data))
         self.send_raw(data, 14)
 
     def cancel(self):
@@ -55,7 +53,6 @@ class bip:
         pi.wave_add_new()
 
         # mark
-        print(freq,mark,space)
         if duty == 1.0:
             pi.wave_add_generic([pigpio.pulse(1 << gpio, 0, mark)])
         else:
