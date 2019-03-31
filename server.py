@@ -359,9 +359,9 @@ class UWB(Process):
         print("Stopping UWB.")
         self.pi.serial_close(self.s1)
 
-class webserver(Process):
+class Webserver(Process):
     def __init__(self, to_tornado, to_main, g):
-        super(webserver, self).__init__()
+        super(Webserver, self).__init__()
         self.to_tornado = to_tornado
         self.to_main = to_main
         self.g = g
@@ -375,39 +375,25 @@ class webserver(Process):
             self.set_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
 
     class WebSocket(tornado.websocket.WebSocketHandler):
-        connections = set()
 
-        def initialize(self, to_tornado, to_main, g):
+        def initialize(self, to_tornado, to_main, g, connections):
             self.to_tornado = to_tornado
             self.to_main = to_main
             self.g = g
-            self.last_update = time.time()
-            tornado.ioloop.PeriodicCallback(self.update_sockets, 50).start()
+            self.connections = connections
 
-        def update_sockets(self):
-            if time.time() - self.last_update > 1:
-                self.last_update = time.time()
-                tanks = self.g.get_tanks()
-                for client in self.connections:
-                    if client.type == 'server':
-                        client.write_message(json.dumps({'t': 'update', 'tanks': tanks}))
-
-            while not self.to_tornado.empty():
-                msg = self.to_tornado.get()
-                for client in self.connections:
-                    if 'tid' in msg.keys() and client.tid == msg['tid']:
-                        client.write_message(json.dumps(msg))
-                    elif 'tid' not in msg.keys() and client.type == 'server':
-                        client.write_message(json.dumps(msg))
-
-     
         def open(self):
             self.type = 'unk'
             self.tid = -1
             self.connections.add(self)
+            print('connect')
      
         def on_message(self, message):
+            print(message)
             msg = json.loads(message)
+
+            if 't' not in msg.keys():
+                return
 
             if msg['t'] == 'join':
                 print('adding tank', msg['tid'])
@@ -418,7 +404,7 @@ class webserver(Process):
             if msg['t'] == 'server':
                 self.type = 'server'
 
-            elif msg['t'] == 'hb':
+            elif msg['t'] == 'hb' and 'tid' in msg.keys():
                 self.g.touch_tank(msg['tid'])
 
             else:
@@ -427,8 +413,24 @@ class webserver(Process):
         def on_close(self):
             self.connections.remove(self)
 
+    def update_sockets(self):
+        if time.time() - self.last_update > 1:
+            self.last_update = time.time()
+            tanks = self.g.get_tanks()
+            for client in self.connections:
+                if client.type == 'server' or client.type == 'unk':
+                    client.write_message(json.dumps({'t': 'update', 'tanks': tanks}))
+
+        while not self.to_tornado.empty():
+            msg = self.to_tornado.get()
+            for client in self.connections:
+                if 'tid' in msg.keys() and client.tid == msg['tid']:
+                    client.write_message(json.dumps(msg))
+                elif 'tid' not in msg.keys() and client.type == 'server':
+                    client.write_message(json.dumps(msg))
+
     def signal_handler(self, signal, frame):
-        print('Stopping webserver.')
+        print('Stopping Webserver.')
         tornado.ioloop.IOLoop.current().stop()
 
     def run(self):
@@ -436,9 +438,13 @@ class webserver(Process):
 
         public = os.path.join(os.path.dirname(__file__), 'server_public')
 
-        print('Starting webserver.')
+        self.last_update = time.time()
+        self.connections = set()
+        tornado.ioloop.PeriodicCallback(self.update_sockets, 50).start()
+
+        print('Starting Webserver.')
         self.webapp = tornado.web.Application([
-            (r"/ws", self.WebSocket, {'to_tornado': self.to_tornado, 'to_main': self.to_main, 'g': self.g }),
+            (r"/ws", self.WebSocket, {'to_tornado': self.to_tornado, 'to_main': self.to_main, 'g': self.g, 'connections': self.connections }),
             (r'/(.*)', self.MyStaticFileHandler, {'path': public, "default_filename": "index.html"}),
         ])
         self.webapp.listen(8000)
@@ -455,8 +461,6 @@ def main():
     manager.start()
     g = manager.Game()
 
-    #g = Game()
-
     to_uwb = Queue()
     to_cam = Queue()
     to_tornado = Queue()
@@ -472,8 +476,8 @@ def main():
         cam = Location_Cam(to_cam, to_main, g)
         cam.start()
 
-    #start webserver
-    web = webserver(to_tornado, to_main, g)
+    #start Webserver
+    web = Webserver(to_tornado, to_main, g)
     web.start()
 
     print('Starting main loop.')
@@ -488,9 +492,11 @@ def main():
                 elif msg['t'] == 'cam':
                     to_tornado.put(msg)
             time.sleep(0.01)
+
         except KeyboardInterrupt:
             running = False
             continue
+
     print('Shutdown.')
 
 if __name__ == "__main__":

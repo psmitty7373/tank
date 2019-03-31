@@ -119,16 +119,11 @@ class RC5_read:
 
         # got a full send
         if self.bits == 14:
-#            sys.stdout.write(chr(self.code & COMMAND_MASK))
-#            sys.stdout.flush()
             self.q.put(chr(self.code & COMMAND_MASK))
             self.reset()
 
-def main():
-    hit = 0
+class Reader(pi, gpio):
     q = queue.Queue()
-    pi = pigpio.pi('localhost', 9999)
-    r2 = RC5_read(pi, 17, q)
     r = RC5_read(pi, 27, q)
     pi.write(22, 0)
 
