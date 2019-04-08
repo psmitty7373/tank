@@ -24,6 +24,10 @@ body {
     font-size: 10px;
     font-family: ocr-a-std;
 }
+.gauge-label-value {
+    font-size: 10px;
+    font-family: ocr-a-std;
+}
 #steering-button {
 	background: url("images/steering.png") no-repeat scroll 0 0 transparent;
     background-color: red;

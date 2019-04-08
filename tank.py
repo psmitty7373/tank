@@ -17,11 +17,11 @@ from uuid import getnode as get_mac
 running = True
 
 # settings
-right_pwm_f = 17
-right_pwm_r = 27
+right_pwm_f = 19
+right_pwm_r = 26
 
-left_pwm_f = 23
-left_pwm_r = 24
+left_pwm_f = 27
+left_pwm_r = 17
 
 min_throttle = 50.0
 
@@ -30,6 +30,7 @@ serial_port_mode = "UWB"
 serial_port_baud = 115200
 serial_port = "/dev/serial0"
 imu_enabled = True
+current_enabled = True
 server_url = "ws://192.168.97.130:8000/ws"
 
 ID = int(md5(str(hex(get_mac())).encode('ascii')).hexdigest()[0:6], 16)
@@ -81,6 +82,7 @@ def steering(x, y):
 class Tank(Process):
     import laser
     import BNO055
+    import INA219
     def __init__(self, to_tank, to_tornado, to_main):
         super(Tank, self).__init__()
         self.to_tank = to_tank
@@ -168,10 +170,14 @@ class Tank(Process):
         else:
             self.bno = None
 
+        #init ina219
+        if current_enabled:
+            self.ina = self.INA219.INA219(bus=3, address=0x44)
+
         #init transponder
-        self.trans = Transponder(self.pi, 26)
+        self.trans = Transponder(self.pi, 12)
         self.trans.beacon()
-        self.pi.write(26,1)
+        self.pi.write(26,0)
 
         #right
         self.pi.set_mode(right_pwm_f, pigpio.OUTPUT)
@@ -189,6 +195,7 @@ class Tank(Process):
         self.left_brake_time = time.time() * 1000
         self.l_t = 0
 
+        # ina219
         self.current = 0
         self.volts = 0
 
@@ -260,17 +267,25 @@ class Tank(Process):
                             pickle.dump(cd, f)
                         self.temp_time = curr_time
 
+            # INA219 ----------------------------------------------------------------
+            if current_enabled and self.ina:
+                self.volts = self.ina.get_bus_voltage()
+                self.current = self.ina.get_current()
+
             while not self.to_tank.empty():
                 self.failsafe_time = curr_time
                 msg = self.to_tank.get()
-                if msg['t'] == "throttle":
-                    self.r_t, self.l_t = msg['throttle']
-                elif msg['t'] == "fire_weapon":
-                    self.weapon_reload_time = curr_time
-                    self.weapon_ready = False
-                    self.weapon.send(ord('A'))
-                elif msg['t'] == "shutdown":
-                    self.running = False
+                if 't' in msg.keys():
+                    if msg['t'] == "throttle":
+                        self.r_t, self.l_t = msg['throttle']
+                    elif msg['t'] == "fire_weapon":
+                        self.weapon_reload_time = curr_time
+                        self.weapon_ready = False
+                        self.weapon.send(ord('A'))
+                    elif msg['t'] == "shutdown":
+                        self.running = False
+                    elif msg['t'] == 'poll':
+                        self.trans.poll()
 
                 # right motor
                 if self.r_t > 0: # forward
@@ -388,21 +403,22 @@ class Transponder:
         self.w_space = pi.wave_create()
 
     def beacon(self):
-        chain = [255, 0] + [self.w_mark,  self.w_space] + [255, 3]
+        chain = [255, 0] + [self.w_mark] * 7 + [self.w_space] * 3 + [255, 3]
         self.pi.wave_chain(chain)
 
-    def ident(self):
-        chain = [255, 0] + [self.w_mark] * 2 + [self.w_space] * 8 + [255, 1, 8, 0] + [255, 0] + [self.w_mark] * 5 + [self.w_space] * 5 + [255, 3]
+    def poll(self):
+        chain = [255, 0] + [self.w_mark] * 3 + [self.w_space] * 7 + [255, 1, 8, 0] + [255, 0] + [self.w_mark] * 7 + [self.w_space] * 3 + [255, 3]
         self.pi.wave_chain(chain)
 
 
 class WebsocketClient(Thread):
-    def __init__(self, to_client, to_main):
+    def __init__(self, to_client, to_tank, to_main):
         super(WebsocketClient, self).__init__()
         self.ioloop = tornado.ioloop.IOLoop.instance()
         self.ws = None
         self.to_client = to_client
         self.to_main = to_main
+        self.to_tank = to_tank
         self.connect()
         tornado.ioloop.PeriodicCallback(self.update_socket, 1000).start()
         self.ioloop.start()
@@ -428,7 +444,7 @@ class WebsocketClient(Thread):
             time.sleep(2)
             self.connect()
         else:
-            print('here', msg)
+            self.to_tank.put(json.loads(msg))
 
     def send(self, msg):
         if not self.ws == None:
@@ -540,7 +556,7 @@ def main():
     web.start()
 
     # threads
-    cs = WebsocketClient(to_client, to_main)
+    cs = WebsocketClient(to_client, to_tank, to_main)
     cs.start()
     cs.join()
 
