@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import base64, cv2, datetime, imutils, json, math, numpy as np, os, pickle, pigpio, random, signal, struct, time
+import base64, cv2, datetime, imutils, json, math, numpy as np, os, pickle, pigpio, random, re, signal, struct, time
 from multiprocessing import Process, Manager, Queue, set_start_method
 from multiprocessing.managers import BaseManager
 from imutils import contours
@@ -46,7 +46,7 @@ class Game(object):
 
     def cleanup_tanks(self):
         now = time.time()
-        for t in self.tanks.keys():
+        for t in list(self.tanks.keys()):
             if now - self.tanks[t]['last_update'] > 30:
                 print('removing tank', t)
                 self.tanks.pop(t, None)
@@ -56,27 +56,31 @@ class Game(object):
             self.tanks[tid]['pos'] = pos
 
     def get_oldest_poll_tid(self):
-        old_time = time.time() - 10
+        old_time = time.time() - 5
         old_tank = None
-        for t in self.tanks.keys():
+        for t in list(self.tanks.keys()):
             if self.tanks[t]['last_poll'] < old_time:
                 old_tank = t
                 old_time = self.tanks[t]['last_poll']
         if not old_tank == None:
-            self.tanks[t]['last_poll'] = time.time()
+            self.tanks[old_tank]['last_poll'] = time.time()
         return old_tank
 
     def get_tanks(self):
         return json.dumps(self.tanks)
 
     def find_tank(self, pos):
-        found = False
+        closest_dist = None
+        closest_tank = None
         for t in self.tanks:
-            is_close = np.isclose(t.pos, pos, 0.2)
-            if is_close[0] and is_close[1]:
-                return t
-        return found
-
+            dist = np.linalg.norm(np.array(pos) - np.array(t.pos))
+            if closest_tank == None or dist < closest_dist:
+                closest_dist = dist
+                closest_tank = t
+        if closest_dist < 20.0:
+            return closest_tank
+        else:
+            return False
 
 class Location_Cam(Process):
     def __init__(self, to_cam, to_main, g):
@@ -87,46 +91,73 @@ class Location_Cam(Process):
 
     def update_bitstreams(self):
         for b in self.bitstreams:
-            if len(b['stream']) == 80 and sum(b['stream']) == 0:
+            if len(b['stream']) == 50 and (sum(b['stream']) == 0 or b['bad_count'] > 256):
                 self.bitstreams.remove(b)
                 continue
 
-            long_avg = float(b['seen_count']) / b['poll_count']
-            short_avg = float(sum(b['stream'])) / len(b['stream'])
+            b['stream'].append(0)
+            b['poll_count'] += 1
+            b['stream'] = b['stream'][-50:]
 
-#            print(b['bid'], b['stream'], b['confidence'], long_avg, short_avg)
+    def read_bitstreams(self):
+        for b in self.bitstreams:
+            if len(b['stream']) < 50:
+                continue
 
-            if b['poll_count'] > 400 and long_avg > 0.4 and long_avg < .6:
+            chr_stream = ''.join(str(b) for b in b['stream'])            
+            chr_stream = chr_stream[chr_stream.find('01')+1:]
+            chr_stream = chr_stream[:40]
+            pulse_count = re.sub('00+', '0', re.sub('11+', '1', chr_stream)).count('1')
+            if '1' in chr_stream:
+                pulse_width = float(chr_stream.count('1')) / pulse_count
+            else:
+                pulse_width = 0
+
+            print(b['tid'], chr_stream, b['confidence'], pulse_count, pulse_width)
+
+            if pulse_count == 4 and pulse_width >= 7:
                 if b['confidence'] < 1:
                     b['confidence'] = 1
-            else:
-                b['confidence'] = 0
 
-            if b['confidence'] > 0 and self.polling and short_avg < 0.40:
+            elif not self.polling and pulse_count < 3:
+                b['confidence'] = 0
+                b['bad_count'] += 1
+
+            if b['confidence'] > 0 and self.polling and pulse_count == 4 and pulse_width < 7:
+                if b['tid'] != self.polling:
+                    print('tank mismatch!!')
+                else:
+                    b['good_count'] += 1
                 print('found tank, probably...')
                 b['confidence'] = 2
                 b['tid'] = self.polling
                 self.polling = False
 
-            b['stream'].append(0)
-            if not self.polling:
-                b['poll_count'] += 1
-            b['stream'] = b['stream'][-80:]
 
     def find_and_set_bitstream(self, pos):
+        closest_bs = None
+        closest_dist = None
+
         for b in self.bitstreams:
-            is_close = np.isclose(b['pos'], pos, 0.2)
-            if is_close[0] and is_close[1]:
-                b['pos'] = pos
-                b['stream'][-1] = 1
-                if not self.polling:
-                    b['seen_count'] += 1
-                if b['tid'] > -1:
+            dist = np.linalg.norm(np.array(pos) - np.array(b['pos']))
+            if closest_bs == None or dist < closest_dist:
+                closest_dist = dist
+                closest_bs = b
+
+        if not closest_bs == None:
+            if closest_dist < 50.0:
+                closest_bs['pos'] = pos
+                closest_bs['stream'][-1] = 1
+                closest_bs['seen_count'] += 1
+                if closest_bs['tid'] > -1:
                     tank_pos = [ translate(pos[0], self.calibration_data['tl'][0], self.calibration_data['tr'][0], 0, 200),
                             translate(pos[1], self.calibration_data['tl'][1], self.calibration_data['bl'][1], 0, 200) ]
-                    self.g.update_tank_pos(b['tid'], tank_pos)
+                    self.g.update_tank_pos(closest_bs['tid'], tank_pos)
                 return
-        self.bitstreams.append({'pos': pos, 'stream': [0], 'seen_count': 1, 'poll_count': 1, 'tid': -1, 'confidence': 0})
+            else:
+                print('huge jump:', closest_dist)
+
+        self.bitstreams.append({'pos': pos, 'stream': [0], 'seen_count': 1, 'poll_count': 1, 'tid': -1, 'confidence': 0, 'bad_count': 0, 'good_count': 0})
 
     def shutdown(self, signal, frame):
         print("Stopping camera.")
@@ -135,6 +166,7 @@ class Location_Cam(Process):
     def get_cam(self):
         ret, image = self.cam.read()
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)[1]
         self.to_main.put({'t': 'cam', 'image': base64.b64encode(cv2.imencode('.png', gray)[1].tostring()).decode('ascii')})
 
     def calibrate_arena(self, corners):
@@ -148,7 +180,7 @@ class Location_Cam(Process):
         now = time.time()
 
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        thresh = cv2.threshold(gray, 210, 255, cv2.THRESH_BINARY)[1]
+        thresh = cv2.threshold(gray, 215, 255, cv2.THRESH_BINARY)[1]
 #        thresh = cv2.erode(thresh, None, iterations=2)
 #        thresh = cv2.dilate(thresh, None, iterations=4)
         cnts = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
@@ -158,7 +190,7 @@ class Location_Cam(Process):
             for (i, c) in enumerate(cnts):
                 found = True
                 ((cX, cY), radius) = cv2.minEnclosingCircle(c)
-                if radius > 1.5 and radius < 7.0 and cX >= self.calibration_data['tl'][0] and cX <= self.calibration_data['tr'][0] and cY >= self.calibration_data['tl'][1] and cY <= self.calibration_data['bl'][1]:
+                if radius > 1.0 and radius < 7.0 and cX >= self.calibration_data['tl'][0] and cX <= self.calibration_data['tr'][0] and cY >= self.calibration_data['tl'][1] and cY <= self.calibration_data['bl'][1]:
 #                    cv2.circle(image, (int(cX), int(cY)), int(radius), (0, 0, 255), 1)
 #                    cv2.putText(image, "#{}".format(i + 1), (int(cX), int(cY) - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1)
                     self.find_and_set_bitstream([cX, cY])
@@ -170,7 +202,13 @@ class Location_Cam(Process):
         if now - self.last_show > 5:
 #            cv2.imshow("hsv", thresh)
             print(1 / (self.tot_time / self.frames))
+            print(self.bitstreams)
             self.last_show = now
+
+        now = time.time()
+        if now - self.last_bitstream_read > 0.25:
+            self.read_bitstreams()
+            self.last_bitstream_read = now
 
 #        if cv2.waitKey(1) == 27:
 #            return
@@ -195,6 +233,7 @@ class Location_Cam(Process):
         self.frames = 0
         self.last_frame = time.time()
         self.last_show = time.time()
+        self.last_bitstream_read = time.time()
 
         if os.path.isfile('arena.conf'):
             print("Loaded arena.conf.")
@@ -209,17 +248,16 @@ class Location_Cam(Process):
         poll_time = time.time()
         while self.running:
             now = time.time()
-            if now - poll_time > 5:
-                if self.polling:
-                    print('stopped polling')
-                    self.polling = False
-                else:
-                    poll_time = now
-                    old_tid = self.g.get_oldest_poll_tid()
-                    print('polling for: ', old_tid)
-                    if not old_tid == None:
-                        self.polling = old_tid
-                        self.to_main.put({'t': 'poll', 'tid': old_tid})
+            if self.polling and now - poll_time > 5:
+                self.polling = False
+
+            if not self.polling and now - poll_time > 7:
+                self.g.cleanup_tanks()
+                poll_time = now
+                old_tid = self.g.get_oldest_poll_tid()
+                if not old_tid == None:
+                    self.polling = old_tid
+                    self.to_main.put({'t': 'poll', 'tid': old_tid})
 
             self.track_tanks()
 
@@ -389,7 +427,6 @@ class Webserver(Process):
             print('connect')
      
         def on_message(self, message):
-            print(message)
             msg = json.loads(message)
 
             if 't' not in msg.keys():
@@ -414,7 +451,7 @@ class Webserver(Process):
             self.connections.remove(self)
 
     def update_sockets(self):
-        if time.time() - self.last_update > 1:
+        if time.time() - self.last_update > 0.1:
             self.last_update = time.time()
             tanks = self.g.get_tanks()
             for client in self.connections:

@@ -71,8 +71,8 @@ function draw(ts) {
 
     var canvas = document.getElementById("canvas");
     var ctx = canvas.getContext("2d");
-    canvas.width  = 2048;
-    canvas.height = 768 * 2;
+    canvas.width  = 400;
+    canvas.height = 400;
     
     // flip canvas vertically
     //ctx.transform(1, 0, 0, -1, 0, canvas.height)
@@ -133,7 +133,7 @@ function connect() {
     ws.onclose = function() {
         setTimeout(function() {
             connect();
-        }, 500);
+        }, 1000);
     }
 
     ws.onopen = function(event) {
