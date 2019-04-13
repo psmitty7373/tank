@@ -29,6 +29,8 @@ let weapon_ready = true;
 // GAUGES
 let lt_gauge = null;
 let rt_gauge = null;
+let c_gauge = null;
+let v_gauge = null;
 
 // OPENCV
 function get_topdown_quad(points, src) {
@@ -344,6 +346,10 @@ function connect() {
                 tank_status.a_x = 0;
             lt_gauge.set(Math.round(msg.l_t));
             rt_gauge.set(Math.round(msg.r_t));
+            document.getElementById("voltage-value").innerHTML = msg.volts + 'v';
+            document.getElementById("current-value").innerHTML = msg.current + 'mah';
+            v_gauge.set(msg.volts);
+            c_gauge.set(msg.current);
             document.getElementById("heading").innerHTML = tank_status.a_x.toString(10).padStart(3,'0');
         }
         
@@ -499,7 +505,7 @@ if (!haveEvents) {
 
 
 // GAUGES:
-var gauge_opts = {
+var throttle_gauge_opts = {
 	angle: 0.15, // The span of the gauge arc
 	lineWidth: 0.44, // The line thickness
 	radiusScale: 1, // Relative radius
@@ -521,6 +527,46 @@ var gauge_opts = {
 	highDpiSupport: true,     // High resolution support
 };
 
+var voltage_gauge_opts = {
+	angle: 0.15, // The span of the gauge arc
+	lineWidth: 0.44, // The line thickness
+	radiusScale: 1, // Relative radius
+	pointer: {
+		length: 0.6, // // Relative to gauge radius
+		strokeWidth: 0.035, // The thickness
+		color: '#000000'
+	},
+	limitMax: false,
+	limitMin: false,
+	generateGradient: true,
+	staticZones: [
+	   {strokeStyle: "#ff0000", min: 5, max: 6.6},
+	   {strokeStyle: "#008000", min: 6.6, max: 8},
+	   {strokeStyle: "#ff0000", min: 8, max: 10}
+	],
+	highDpiSupport: true,     // High resolution support
+};
+
+var current_gauge_opts = {
+	angle: 0.15, // The span of the gauge arc
+	lineWidth: 0.44, // The line thickness
+	radiusScale: 1, // Relative radius
+	pointer: {
+		length: 0.6, // // Relative to gauge radius
+		strokeWidth: 0.035, // The thickness
+		color: '#000000'
+	},
+	limitMax: false,
+	limitMin: false,
+	generateGradient: true,
+	staticZones: [
+	   {strokeStyle: "#ff0000", min: 0, max: 100},
+	   {strokeStyle: "#008000", min: 100, max: 1200},
+	   {strokeStyle: "#ff0000", min: 1200, max: 1600}
+	],
+	highDpiSupport: true,     // High resolution support
+};
+
 // START REMOTE VIDEO
 var websocketSignalingChannel = new WebSocketSignalingChannel(document.getElementById("remoteVideo"));
 
@@ -534,18 +580,34 @@ var websocketSignalingChannel = new WebSocketSignalingChannel(document.getElemen
     canvas.height = canvas.offsetHeight;
 
     let target = document.getElementById('left-throttle');
-    lt_gauge = new Gauge(target).setOptions(gauge_opts);
+    lt_gauge = new Gauge(target).setOptions(throttle_gauge_opts);
     lt_gauge.maxValue = 255;
     lt_gauge.setMinValue(-255);
     lt_gauge.animationSpeed = 32;
     lt_gauge.set(0);
 
     target = document.getElementById('right-throttle');
-    rt_gauge = new Gauge(target).setOptions(gauge_opts);
+    rt_gauge = new Gauge(target).setOptions(throttle_gauge_opts);
     rt_gauge.maxValue = 255;
     rt_gauge.setMinValue(-255);
     rt_gauge.animationSpeed = 32;
     rt_gauge.set(0);
+
+    target = document.getElementById('voltage');
+    v_gauge = new Gauge(target).setOptions(voltage_gauge_opts);
+    v_gauge.maxValue = 10.0;
+    v_gauge.setMinValue(5.0);
+    v_gauge.animationSpeed = 32;
+    v_gauge.set(5);
+
+    target = document.getElementById('current');
+    c_gauge = new Gauge(target).setOptions(current_gauge_opts);
+    c_gauge.maxValue = 1600.0;
+    c_gauge.setMinValue(0.0);
+    c_gauge.animationSpeed = 32;
+    c_gauge.set(0);
+
+
 
     requestAnimationFrame(update);
 
