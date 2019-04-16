@@ -56,13 +56,14 @@ class Game(object):
             self.tanks[tid]['pos'] = pos
 
     def get_oldest_poll_tid(self):
-        old_time = time.time() - 5
+        old_time = time.time() - 3
         old_tank = None
         for t in list(self.tanks.keys()):
             if self.tanks[t]['last_poll'] < old_time:
                 old_tank = t
                 old_time = self.tanks[t]['last_poll']
         if not old_tank == None:
+            print('setting old_tank', old_tank)
             self.tanks[old_tank]['last_poll'] = time.time()
         return old_tank
 
@@ -115,7 +116,7 @@ class Location_Cam(Process):
 
             print(b['tid'], chr_stream, b['confidence'], pulse_count, pulse_width)
 
-            if pulse_count == 4 and pulse_width >= 7:
+            if pulse_count == 4 and pulse_width >= 6:
                 if b['confidence'] < 1:
                     b['confidence'] = 1
 
@@ -123,7 +124,7 @@ class Location_Cam(Process):
                 b['confidence'] = 0
                 b['bad_count'] += 1
 
-            if b['confidence'] > 0 and self.polling and pulse_count == 4 and pulse_width < 7:
+            if b['confidence'] > 0 and self.polling and pulse_count == 4 and pulse_width < 6:
                 if b['tid'] != self.polling:
                     print('tank mismatch!!')
                 else:
@@ -153,6 +154,7 @@ class Location_Cam(Process):
                     tank_pos = [ translate(pos[0], self.calibration_data['tl'][0], self.calibration_data['tr'][0], 0, 200),
                             translate(pos[1], self.calibration_data['tl'][1], self.calibration_data['bl'][1], 0, 200) ]
                     self.g.update_tank_pos(closest_bs['tid'], tank_pos)
+                    self.to_main.put({ 't': 'pos', 'tid': closest_bs['tid'], 'pos': tank_pos })
                 return
             else:
                 print('huge jump:', closest_dist)
@@ -167,7 +169,7 @@ class Location_Cam(Process):
         ret, image = self.cam.read()
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)[1]
-        self.to_main.put({'t': 'cam', 'image': base64.b64encode(cv2.imencode('.png', gray)[1].tostring()).decode('ascii')})
+        self.to_main.put({'t': 'cam', 'image': base64.b64encode(cv2.imencode('.png', thresh)[1].tostring()).decode('ascii')})
 
     def calibrate_arena(self, corners):
         self.calibration_data = corners
@@ -190,7 +192,7 @@ class Location_Cam(Process):
             for (i, c) in enumerate(cnts):
                 found = True
                 ((cX, cY), radius) = cv2.minEnclosingCircle(c)
-                if radius > 1.0 and radius < 7.0 and cX >= self.calibration_data['tl'][0] and cX <= self.calibration_data['tr'][0] and cY >= self.calibration_data['tl'][1] and cY <= self.calibration_data['bl'][1]:
+                if radius > 1.0 and radius < 20.0 and cX >= self.calibration_data['tl'][0] and cX <= self.calibration_data['tr'][0] and cY >= self.calibration_data['tl'][1] and cY <= self.calibration_data['bl'][1]:
 #                    cv2.circle(image, (int(cX), int(cY)), int(radius), (0, 0, 255), 1)
 #                    cv2.putText(image, "#{}".format(i + 1), (int(cX), int(cY) - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1)
                     self.find_and_set_bitstream([cX, cY])
@@ -202,7 +204,7 @@ class Location_Cam(Process):
         if now - self.last_show > 5:
 #            cv2.imshow("hsv", thresh)
             print(1 / (self.tot_time / self.frames))
-            print(self.bitstreams)
+            #print(self.bitstreams)
             self.last_show = now
 
         now = time.time()
@@ -249,12 +251,14 @@ class Location_Cam(Process):
         while self.running:
             now = time.time()
             if self.polling and now - poll_time > 5:
+                print('not found')
                 self.polling = False
 
-            if not self.polling and now - poll_time > 7:
+            if not self.polling and now - poll_time > 2:
                 self.g.cleanup_tanks()
                 poll_time = now
                 old_tid = self.g.get_oldest_poll_tid()
+                print('Polling for:', old_tid)
                 if not old_tid == None:
                     self.polling = old_tid
                     self.to_main.put({'t': 'poll', 'tid': old_tid})
@@ -522,7 +526,7 @@ def main():
         try:
             while not to_main.empty():
                 msg = to_main.get()
-                if msg['t'] == 'poll':
+                if msg['t'] == 'poll' or msg['t'] == 'pos':
                     to_tornado.put(msg)
                 elif msg['t'] == 'get_cam' or msg['t'] == 'calibrate':
                     to_cam.put(msg)
