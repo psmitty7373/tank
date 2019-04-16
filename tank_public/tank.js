@@ -249,7 +249,7 @@ function draw_minimap() {
     canvas.height = canvas.offsetHeight;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.transform(1, 0, 0, -1, 0, canvas.height);
+    //ctx.transform(1, 0, 0, -1, 0, canvas.height);
     let center = get_center();
 
     // draw minimap circle
@@ -272,10 +272,10 @@ function draw_minimap() {
             ctx.stroke();
         }
         last_pos = pos_log[i];
-    }
-    if (last_pos) {
-        ctx.fillStyle = "red";
-        ctx.fillRect(last_pos.x, last_pos.y, 4, 4);
+        if (i == 0) {
+            ctx.fillStyle = "red";
+            ctx.fillRect(last_pos.x - 2.5, last_pos.y - 2.5, 5, 5);
+        }
     }
 
     // draw anchors

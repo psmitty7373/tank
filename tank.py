@@ -177,7 +177,6 @@ class Tank(Process):
         #init transponder
         self.trans = Transponder(self.pi, 12)
         self.trans.beacon()
-        self.pi.write(26,0)
 
         #right
         self.pi.set_mode(right_pwm_f, pigpio.OUTPUT)
@@ -284,6 +283,10 @@ class Tank(Process):
                         self.weapon.send(ord('A'))
                     elif msg['t'] == "shutdown":
                         self.running = False
+                    elif msg['t'] == 'pos' and 'pos' in msg.keys():
+                        self.pos_x = msg['pos'][0]
+                        self.pos_y = msg['pos'][1]
+                        self.pos_z = 0
                     elif msg['t'] == 'poll':
                         self.trans.poll()
 
@@ -394,6 +397,7 @@ class Tank(Process):
 class Transponder:
     def __init__(self, pi, gpio, fps=40, clear=False):
         self.pi = pi
+        self.pi.write(gpio, 1)
         if clear:
             self.pi.wave_clear()
         pi.wave_add_new()
@@ -403,11 +407,11 @@ class Transponder:
         self.w_space = pi.wave_create()
 
     def beacon(self):
-        chain = [255, 0] + [self.w_mark] * 7 + [self.w_space] * 3 + [255, 3]
+        chain = [255, 0] + [self.w_mark] * 8 + [self.w_space] * 2 + [255, 3]
         self.pi.wave_chain(chain)
 
     def poll(self):
-        chain = [255, 0] + [self.w_mark] * 3 + [self.w_space] * 7 + [255, 1, 8, 0] + [255, 0] + [self.w_mark] * 7 + [self.w_space] * 3 + [255, 3]
+        chain = [255, 0] + [self.w_mark] * 4 + [self.w_space] * 6 + [255, 1, 4, 0] + [255, 0] + [self.w_mark] * 8 + [self.w_space] * 2 + [255, 3]
         self.pi.wave_chain(chain)
 
 
