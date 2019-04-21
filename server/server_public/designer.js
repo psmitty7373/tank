@@ -49,7 +49,7 @@ function handle_mouse_click(evt) {
     }
 }
 
-function save() {
+function save_walls() {
     if (ws) {
         ws.send(JSON.stringify({'t': 'wall_update', 'wall_data': JSON.stringify(walls) }));
     }

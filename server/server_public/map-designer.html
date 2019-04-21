@@ -19,9 +19,9 @@
                 </div>
                 <div id="navbar" class="collapse navbar-collapse">
                     <ul class="nav navbar-nav">
-                        <li class="active"><a href="#">Home</a></li>
+                        <li><a href="/">Home</a></li>
                         <li><a href="calibrate.html">Calibrate</a></li>
-                        <li><a href="map-designer.html">Designer</a></li>
+                        <li class="active"><a href="map-designer.html">Designer</a></li>
                     </ul>
                 </div><!--/.nav-collapse -->
             </div>
@@ -29,6 +29,16 @@
         <div class="container" id="container">
             <canvas id="canvas"></canvas>
         </div>
+        <nav class="navbar navbar-inverse navbar-fixed-bottom">
+            <div class="container">
+                <div id="navbar" class="collapse navbar-collapse">
+                    <ul class="nav navbar-nav">
+                        <li><a href="#" onclick="clear_walls(); return false;">Clear</a></li>
+                        <li><a href="#" onclick="save_walls(); return false;">Save</a></li>
+                    </ul>
+                </div><!--/.nav-collapse -->
+            </div>
+        </nav>
         <script src="jquery.min.js"></script>
         <script src="bootstrap.min.js"></script>
         <script src="designer.js"></script>
