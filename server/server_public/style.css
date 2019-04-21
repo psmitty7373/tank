@@ -1,0 +1,24 @@
+body {
+	overflow : hidden;
+	padding : 0;
+	margin : 0;
+	background-color: #000000;
+    padding-top: 50px;
+}
+@font-face { 
+    font-family: "ocr-a-std";
+    src: url("ocr.woff2") format("woff2");
+}
+#container, #interface {
+    height: 100%;
+}
+#interface {
+	z-index: 15;
+	position: absolute !important;
+    pointer-events: none;
+}
+#canvas {
+    width: 100%;
+    height: 100%;
+    background-color: white;
+}

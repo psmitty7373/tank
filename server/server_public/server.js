@@ -1,3 +1,9 @@
+let arena_width = 200;
+let arena_height = 200;
+let arena_grid_factor = 5;
+let ws = null;
+let walls = [];
+
 function isPrivateAddress(ipaddress) {
     var parts = ipaddress.split('.');
     return parts[0] === '10' ||
@@ -87,6 +93,22 @@ function draw(ts) {
     // zoom
     ctx.scale(2, 2);
 
+    // draw grid
+    ctx.strokeStyle = "#c1c1c1";
+    for (var x = 0; x < arena_width; x += arena_width / arena_grid_factor) {
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, arena_height);
+        ctx.stroke();
+
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(0, x);
+        ctx.lineTo(arena_width, x);
+        ctx.stroke();
+    }
+
     // draw anchors
     for (i = 0; i < anchors.length; i++) {
         if (i == 0)
@@ -96,6 +118,16 @@ function draw(ts) {
         else
             ctx.fillStyle = "blue";
         ctx.fillRect(anchors[i].x - 2, anchors[i].y - 2, 4, 4);
+    }
+
+    // draw walls
+    ctx.strokeStyle = "#333333";
+    for (i = 0; i < walls.length; i++) {
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(walls[i].from.x, walls[i].from.y);
+        ctx.lineTo(walls[i].to.x, walls[i].to.y);
+        ctx.stroke();
     }
 
     // draw tanks
@@ -156,6 +188,10 @@ function connect() {
                         pos_log[tank].push({x: msg['tanks'][tank].pos[0], y: msg['tanks'][tank].pos[1]});
                     }
                 }
+            }
+            else if (msg['t'] == 'arena_config') {
+                if (msg['config'] && msg['config']['walls'])
+                    walls = msg['config']['walls'];
             }
         }
     };
