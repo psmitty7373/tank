@@ -12,6 +12,7 @@ let anchors = [
         {id: 'c', x: 200, y: 200, z: 0},
         {id: 'd', x: 200, y: 0, z: 0}
 ];
+let walls = [];
 
 let pos_log = [];
 let joystick = { x: 0, y: 0 };
@@ -31,107 +32,6 @@ let lt_gauge = null;
 let rt_gauge = null;
 let c_gauge = null;
 let v_gauge = null;
-
-// OPENCV
-function get_topdown_quad(points, src) {
-    let dest = new cv.Mat();
-    let corner1 = new cv.Point(points.data32S[0], points.data32S[1]);
-    let corner2 = new cv.Point(points.data32S[2], points.data32S[3]);
-    let corner3 = new cv.Point(points.data32S[4], points.data32S[5]);
-    let corner4 = new cv.Point(points.data32S[6], points.data32S[7]);
-
-    let corners = [{ corner: corner1 }, { corner: corner2 }, { corner: corner3 }, { corner: corner4 }];
-    corners.sort((item1, item2) => { return (item1.corner.y < item2.corner.y) ? -1 : (item1.corner.y > item2.corner.y) ? 1 : 0; }).slice(0, 5);
-
-    let tl = corners[0].corner.x < corners[1].corner.x ? corners[0] : corners[1];
-    let tr = corners[0].corner.x > corners[1].corner.x ? corners[0] : corners[1];
-    let bl = corners[2].corner.x < corners[3].corner.x ? corners[2] : corners[3];
-    let br = corners[2].corner.x > corners[3].corner.x ? corners[2] : corners[3];
-
-    let widthBottom = Math.hypot(br.corner.x - bl.corner.x, br.corner.y - bl.corner.y);
-    let widthTop = Math.hypot(tr.corner.x - tl.corner.x, tr.corner.y - tl.corner.y);
-    let theWidth = (widthBottom > widthTop) ? widthBottom : widthTop;
-    let heightRight = Math.hypot(tr.corner.x - br.corner.x, tr.corner.y - br.corner.y);
-    let heightLeft = Math.hypot(tl.corner.x - bl.corner.x, tr.corner.y - bl.corner.y);
-    let theHeight = (heightRight > heightLeft) ? heightRight : heightLeft;
-
-    let dest_coords = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, theWidth - 1, 0, theWidth - 1, theHeight - 1, 0, theHeight - 1]);
-    let src_coords = cv.matFromArray(4, 1, cv.CV_32FC2, [tl.corner.x, tl.corner.y, tr.corner.x, tr.corner.y, br.corner.x, br.corner.y, bl.corner.x, bl.corner.y]);
-    let dsize = new cv.Size(theWidth, theHeight);
-    let M = cv.getPerspectiveTransform(src_coords, dest_coords)
-    cv.warpPerspective(src, dest, M, dsize, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
-    let r = new cv.Rect();
-    let px = dest.ucharPtr(5,5);
-    let glyph = new Array(25).fill(0);
-    if (px[0] < 128 && px[1] < 128 && px[2] < 128) {
-        let rect = new cv.Rect();
-        for (let y = 0; y < 5; y++) {
-            for (let x = 0; x < 5; x++) {
-                let block = new cv.Mat();
-                rect.x = x * Math.floor(dest.cols / 5);
-                rect.width = Math.floor(dest.cols / 5);
-                rect.y = y * Math.floor(dest.rows / 5);
-                rect.height = Math.floor(dest.rows / 5);
-                block = dest.roi(rect);
-                let mean = cv.mean(block);
-                let color = new cv.Scalar(255, 30, 30, 255);
-                if (mean[0] < 128 && mean[1] < 128 && mean[2] < 128) {
-                    glyph[(y * 5) + x] = 1;
-                    color[0] = 30;
-                    color[1] = 255;
-                }
-                cv.rectangle(dest, new cv.Point(rect.x, rect.y), new cv.Point(rect.x + rect.width, rect.y + rect.height), color, 1)
-                block.delete();
-            }
-        }
-    }
-    if (glyph.toString() == "1,1,1,1,1,1,1,0,1,1,1,0,1,1,1,1,1,0,0,1,1,1,1,1,1")
-        cv.imshow('opencv', dest);
-    dest.delete();
-}
-
-cv['onRuntimeInitialized']=()=>{
-    video.width = video.offsetWidth;
-    video.height = video.offsetHeight;
-    let cap = new cv.VideoCapture(video);
-
-    let src = new cv.Mat(video.height, video.width, cv.CV_8UC4);
-    let sm = new cv.Mat();
-    let gray = new cv.Mat();
-    let edges = new cv.Mat();
-    let contours = new cv.MatVector();
-    let hierarchy = new cv.Mat();
-    let color = new cv.Scalar(255, 30, 30, 255);
-    let ksize = new cv.Size(5,5);
-
-    function processFrame() {
-        cap.read(src);
-        cv.resize(src, sm, new cv.Size(1024, 768), 0, 0, cv.INTER_AREA);
-        cv.cvtColor(sm, gray, cv.COLOR_BGR2GRAY);
-        cv.GaussianBlur(gray, gray, ksize, 0, 0, cv.BORDER_DEFAULT);
-        cv.Canny(gray, edges, 100, 200, 3, true);
-        cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
-//        cv.drawContours(sm, contours, -1, color, 1, cv.LINE_8, hierarchy, 100);
-
-        for (let i = 0; i < contours.size(); i++) {
-            let cnt = contours.get(i);
-            let approx = new cv.Mat();
-            let perimeter = cv.arcLength(cnt, false);
-            cv.approxPolyDP(cnt, approx, 0.05 * perimeter, true);
-            if (approx.rows == 4) {
-                get_topdown_quad(approx, sm);
-            }
-
-            approx.delete();
-//            cv.rectangle(src, new cv.Point(br.x, br.y), new cv.Point(br.x + br.width, br.y + br.height), color, 1);
-        }
-
-
-    //    cv.imshow('opencv', src);
-//        setTimeout(processFrame, 100);
-    }
-//    setTimeout(processFrame, 0);
-}
 
 function get_center() {
     let c_x = 0;
@@ -287,6 +187,17 @@ function draw_minimap() {
         ctx.stroke();
     }
 
+    // draw walls
+    ctx.strokeStyle = "#333333";
+    for (i = 0; i < walls.length; i++) {
+        ctx.lineWidth = 0.5;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(walls[i].from.x, walls[i].from.y);
+        ctx.lineTo(walls[i].to.x, walls[i].to.y);
+        ctx.stroke();
+    }
+
     for (i = 0; i < anchors.length; i++) {
         if (i == 0)
             ctx.fillStyle = "green";
@@ -336,33 +247,39 @@ function connect() {
         document.getElementById("status-bar").innerHTML = event.data;
         msg = JSON.parse(event.data);
         // verify msg
-        if (Object.keys(msg).some(r=>['a_x', 'a_y', 'a_z', 'l_t', 'r_t', 'volts', 'current', 'x', 'y'].includes(r))) {
-            // heading
-            tank_status.a_x = Math.round(msg.a_x);
-            tank_status.a_y = Math.round(msg.a_y);
-            tank_status.a_z = Math.round(msg.a_z);
-            if (tank_status.a_x == 360)
-                tank_status.a_x = 0;
+        if (msg['t'] == 'status') {
+            if (Object.keys(msg).some(r=>['a_x', 'a_y', 'a_z', 'l_t', 'r_t', 'volts', 'current', 'x', 'y'].includes(r))) {
+                // heading
+                tank_status.a_x = Math.round(msg.a_x);
+                tank_status.a_y = Math.round(msg.a_y);
+                tank_status.a_z = Math.round(msg.a_z);
+                if (tank_status.a_x == 360)
+                    tank_status.a_x = 0;
 
-            // throttle
-            lt_gauge.set(Math.round(msg.l_t));
-            rt_gauge.set(Math.round(msg.r_t));
+                // throttle
+                lt_gauge.set(Math.round(msg.l_t));
+                rt_gauge.set(Math.round(msg.r_t));
 
-            // current
-            document.getElementById("voltage-value").innerHTML = msg.volts + 'v';
-            document.getElementById("current-value").innerHTML = msg.current + 'mah';
+                // current
+                document.getElementById("voltage-value").innerHTML = msg.volts + 'v';
+                document.getElementById("current-value").innerHTML = msg.current + 'mah';
 
-            v_gauge.set(msg.volts);
-            c_gauge.set(msg.current);
+                v_gauge.set(msg.volts);
+                c_gauge.set(msg.current);
 
-            // heading
-            document.getElementById("heading").innerHTML = tank_status.a_x.toString(10).padStart(3,'0');
+                // heading
+                document.getElementById("heading").innerHTML = tank_status.a_x.toString(10).padStart(3,'0');
 
-            // update position log
-            pos_log.unshift({x: msg.x, y: msg.y});
-            pos_log = pos_log.splice(0,50);
+                // update position log
+                pos_log.unshift({x: msg.x, y: msg.y});
+                pos_log = pos_log.splice(0,50);
+            }
+        } else if (msg['t'] == 'arena_config') {
+            if (msg['t'] == 'arena_config') {
+                if (msg['config'] && msg['config']['walls'])
+                    walls = msg['config']['walls'];
+            }
         }
-
     };
 }
 
@@ -581,10 +498,6 @@ var websocketSignalingChannel = new WebSocketSignalingChannel(document.getElemen
     connect();
     websocketSignalingChannel.doSignalingConnect()
 
-    let canvas = document.getElementById("opencv");
-    canvas.width  = canvas.offsetWidth;
-    canvas.height = canvas.offsetHeight;
-
     let target = document.getElementById('left-throttle');
     lt_gauge = new Gauge(target).setOptions(throttle_gauge_opts);
     lt_gauge.maxValue = 255;
@@ -612,8 +525,6 @@ var websocketSignalingChannel = new WebSocketSignalingChannel(document.getElemen
     c_gauge.setMinValue(0.0);
     c_gauge.animationSpeed = 32;
     c_gauge.set(0);
-
-
 
     requestAnimationFrame(update);
 

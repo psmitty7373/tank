@@ -30,7 +30,7 @@ serial_port_mode = "UWB"
 serial_port_baud = 115200
 serial_port = "/dev/serial0"
 imu_enabled = False
-current_enabled = True
+current_enabled = False
 server_url = "ws://192.168.97.130:8000/ws"
 
 ID = int(md5(str(hex(get_mac())).encode('ascii')).hexdigest()[0:6], 16)
@@ -85,6 +85,7 @@ class Tank(Process):
     import INA219
     def __init__(self, to_tank, to_tornado, to_main):
         super(Tank, self).__init__()
+        self.arena_config = {'corners': {'tl': [0,0], 'tr': [640,0], 'bl': [0, 480], 'br': [640, 480]}, 'walls': []}
         self.to_tank = to_tank
         self.to_main = to_main
         self.to_tornado = to_tornado
@@ -175,7 +176,7 @@ class Tank(Process):
             self.ina = self.INA219.INA219(bus=3, address=0x44)
 
         #init transponder
-        self.trans = Transponder(self.pi, 12)
+        self.trans = Transponder(self.pi, 22)
         self.trans.beacon()
 
         #right
@@ -271,6 +272,7 @@ class Tank(Process):
                 self.volts = self.ina.get_bus_voltage()
                 self.current = self.ina.get_current()
 
+            # handle all messages in the queue
             while not self.to_tank.empty():
                 self.failsafe_time = curr_time
                 msg = self.to_tank.get()
@@ -287,8 +289,16 @@ class Tank(Process):
                         self.pos_x = msg['pos'][0]
                         self.pos_y = msg['pos'][1]
                         self.pos_z = 0
+                    # handle a poll request
                     elif msg['t'] == 'poll':
                         self.trans.poll()
+                    # if we get an arena_config, blast it out
+                    elif msg['t'] == 'arena_config' and 'config' in msg.keys():
+                        self.arena_config = msg['config']
+                        self.to_tornado.put(msg)
+                    # when a client connects send the current arena_config
+                    elif msg['t'] == 'connect':
+                        self.to_tornado.put({ 't': 'arena_config', 'config': self.arena_config })
 
                 # right motor
                 if self.r_t > 0: # forward
@@ -370,7 +380,7 @@ class Tank(Process):
                         self.pi.set_PWM_dutycycle(left_pwm_f, 0)
                         self.pi.set_PWM_dutycycle(left_pwm_r, abs(self.l_t))
 
-                #right motor speed
+                # right motor speed
                 if self.r_t == 0 or self.right_braking:
                     self.pi.set_PWM_dutycycle(right_pwm_f, 0)
                     self.pi.set_PWM_dutycycle(right_pwm_r, 0)
@@ -382,10 +392,12 @@ class Tank(Process):
                         self.pi.set_PWM_dutycycle(right_pwm_f, 0)
                         self.pi.set_PWM_dutycycle(right_pwm_r, abs(self.r_t))
 
-            #send current status
+            # send current status
             if not self.to_tornado.full() and time.time() * 1000 - self.heartbeat_time > 100:
                 self.heartbeat_time = time.time() * 1000
                 self.to_tornado.put({ 't': 'status', 'current': self.current, 'volts': self.volts, 'l_t': self.l_t, 'r_t': self.r_t, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
+
+            # prevent busy waiting
             time.sleep(0.01)
 
         if serial_port_enabled:
@@ -493,7 +505,8 @@ class Webserver(Process):
 
         def open(self):
             self.connections.add(self)
-     
+            self.to_tank.put({ 't': 'connect' })
+        
         def on_message(self, msg):
             msg = json.loads(msg)
             if msg['t'] == 't':
