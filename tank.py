@@ -29,7 +29,7 @@ serial_port_enabled = False
 serial_port_mode = "UWB"
 serial_port_baud = 115200
 serial_port = "/dev/serial0"
-imu_enabled = True
+imu_enabled = False
 current_enabled = True
 server_url = "ws://192.168.97.130:8000/ws"
 

@@ -335,27 +335,33 @@ function connect() {
     ws.onmessage = function(event) {
         document.getElementById("status-bar").innerHTML = event.data;
         msg = JSON.parse(event.data);
-        // heading
-        if (!msg.a_x)
-            document.getElementById("heading").innerHTML = '000';
-        else {
+        // verify msg
+        if (Object.keys(msg).some(r=>['a_x', 'a_y', 'a_z', 'l_t', 'r_t', 'volts', 'current', 'x', 'y'].includes(r))) {
+            // heading
             tank_status.a_x = Math.round(msg.a_x);
             tank_status.a_y = Math.round(msg.a_y);
             tank_status.a_z = Math.round(msg.a_z);
             if (tank_status.a_x == 360)
                 tank_status.a_x = 0;
+
+            // throttle
             lt_gauge.set(Math.round(msg.l_t));
             rt_gauge.set(Math.round(msg.r_t));
+
+            // current
             document.getElementById("voltage-value").innerHTML = msg.volts + 'v';
             document.getElementById("current-value").innerHTML = msg.current + 'mah';
+
             v_gauge.set(msg.volts);
             c_gauge.set(msg.current);
+
+            // heading
             document.getElementById("heading").innerHTML = tank_status.a_x.toString(10).padStart(3,'0');
+
+            // update position log
+            pos_log.unshift({x: msg.x, y: msg.y});
+            pos_log = pos_log.splice(0,50);
         }
-        
-        // update position log
-        pos_log.unshift({x: msg.x, y: msg.y});
-        pos_log = pos_log.splice(0,50);
 
     };
 }

@@ -5,3 +5,17 @@ python3-numpy
 python3-tornado
 python3-smbus
 python3-asyncio
+
+enable camera, spi
+sudo apt install python3-pip
+sudo apt install pigpio
+sudo systemctle enable pigpiod
+sudo vi /lib/systemd/system/pigpiod.service (add -p 9999 to execstart)
+sudo systemctl restart pigpiod
+sudo apt install python3-pigpio
+sudo pip3 install numpy (had to increase swap)
+sudo pip3 install tornado
+sudo pip3 install smbus
+sudo dpkg -i deps/rws_0.73.2_armhf.deb
+sudo systemctl enable rws
+udo apt install i2c-tools
