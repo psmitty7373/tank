@@ -38,6 +38,7 @@ class CTF():
     def tick(self):
         return
 
+# master game class
 class Game(object):
     def __init__(self):
         self.tanks = {}
@@ -46,6 +47,7 @@ class Game(object):
         self.arena_config = None
         self.load_arena_config()
 
+    # load arena configuration from pickle file
     def load_arena_config(self):
         if os.path.isfile('arena.conf'):
             print("Loaded arena.conf.")
@@ -56,13 +58,16 @@ class Game(object):
         else:
             self.arena_config = {'corners': {'tl': [0,0], 'tr': [640,0], 'bl': [0, 480], 'br': [640, 480]}, 'walls': []}
 
-    def get_config(self):
+    # helper to send config to a subprocess
+    def get_arena_config(self):
         return self.arena_config
 
+    # write arena configuration to file
     def save_arena_config(self):
         with open('arena.conf', 'wb') as f:
             pickle.dump(self.arena_config, f)
 
+    # helper to send calibration data to subprocess
     def get_calibration(self):
         return self.arena_config['corners']
 
@@ -97,6 +102,7 @@ class Game(object):
         if tid in self.tanks.keys():
             self.tanks[tid]['pos'] = pos
 
+    # find the tank with the oldest poll time
     def get_oldest_poll_tid(self):
         old_time = time.time() - 3
         old_tank = None
@@ -109,9 +115,11 @@ class Game(object):
             self.tanks[old_tank]['last_poll'] = time.time()
         return old_tank
 
+    # return a copy of the tanks to a subprocess
     def get_tanks(self):
         return json.dumps(self.tanks)
 
+    # find a tank by position
     def find_tank(self, pos):
         closest_dist = None
         closest_tank = None
@@ -458,6 +466,7 @@ class Webserver(Process):
             self.type = 'unk'
             self.tid = -1
             self.connections.add(self)
+            self.write_message(json.dumps({ 't': 'arena_config', 'config': self.g.get_arena_config() }))
             print('connect')
      
         def on_message(self, message):
@@ -474,10 +483,12 @@ class Webserver(Process):
 
             elif msg['t'] == 'server':
                 self.type = 'server'
-                self.write_message(json.dumps({ 't': 'arena_config', 'config': self.g.get_config() }))
 
             elif msg['t'] == 'wall_update' and 'wall_data' in msg.keys():
+                # save new walls
                 self.g.update_walls(json.loads(msg['wall_data']))
+                # blast updated walls to all clients
+                self.to_tornado.put({ 'tid': 'broadcast', 't': 'arena_config', 'config': self.g.get_arena_config() })
 
             elif msg['t'] == 'hb' and 'tid' in msg.keys():
                 self.g.touch_tank(msg['tid'])
@@ -499,7 +510,7 @@ class Webserver(Process):
         while not self.to_tornado.empty():
             msg = self.to_tornado.get()
             for client in self.connections:
-                if 'tid' in msg.keys() and client.tid == msg['tid']:
+                if ('tid' in msg.keys() and client.tid == msg['tid']) or ('tid' in msg.keys() and msg['tid'] == 'broadcast'):
                     client.write_message(json.dumps(msg))
                 elif 'tid' not in msg.keys() and client.type == 'server':
                     client.write_message(json.dumps(msg))
