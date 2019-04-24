@@ -25,7 +25,7 @@ function trace(arg) {
 
 function PeerConnectionClient(remoteVideo, doSendPeerMessage) {
     // configuration for peerconnection
-    this.pcConfig_ = {"iceServers": [{"urls": "stun:stun.l.google.com:19302"}]};
+    this.pcConfig_ = {"iceServers": []};//{"urls": "stun:stun.l.google.com:19302"}]};
     this.pcOptions_ = { optional: [ {DtlsSrtpKeyAgreement: true} ] };
 
     this.messageCounter_ = 0;

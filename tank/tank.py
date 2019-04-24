@@ -23,8 +23,8 @@ left_pwm_r = 17
 
 min_throttle = 50.0
 
-imu_enabled = False
-current_enabled = False
+imu_enabled = True
+current_enabled = True
 server_url = "ws://192.168.97.130:8000/ws"
 
 ID = int(md5(str(hex(get_mac())).encode('ascii')).hexdigest()[0:6], 16)
@@ -123,7 +123,7 @@ class Tank(Process):
             self.ina = self.INA219.INA219(bus=3, address=0x44)
 
         #init transponder
-        self.trans = Transponder(self.pi, 22)
+        self.trans = Transponder(self.pi, 12)
         self.trans.beacon()
 
         #right
@@ -343,7 +343,7 @@ class Tank(Process):
                         self.pi.set_PWM_dutycycle(right_pwm_r, abs(self.r_t))
 
             # send current status
-            if not self.to_tornado.full() and time.time() * 1000 - self.heartbeat_time > 100:
+            if not self.to_tornado.full() and time.time() * 1000 - self.heartbeat_time > 50:
                 self.heartbeat_time = time.time() * 1000
                 self.to_tornado.put({ 't': 'status', 'current': self.current, 'volts': self.volts, 'l_t': self.l_t, 'r_t': self.r_t, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality, 'objects': self.objects })
 

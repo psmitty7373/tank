@@ -90,7 +90,7 @@ function draw_hud() {
     keys = Object.keys(objects);
     for (i = 0; i < keys.length; i++) {
         azim_to_obj = Math.atan2(objects[keys[i]]['pos'][0] - tank_status.x, tank_status.y - objects[keys[i]]['pos'][1]) * 180 / Math.PI;
-        relative_azim = Math.min(Math.max(tank_status.a_x - azim_to_obj, -30), 30);
+        relative_azim = Math.max(Math.min(-1 * ((azim_to_obj - tank_status.a_x + 540) % 360 - 180), 30), -30)
         screen_azim = (canvas.width / 2) - ((canvas.width / 60.0) * relative_azim);
         draw_icon(ctx, 'flag.png', screen_azim - 30, canvas.height/2 - 100, 60, 60);
     }
@@ -281,9 +281,9 @@ function connect() {
         if (msg['t'] == 'status') {
             if (Object.keys(msg).some(r=>['a_x', 'a_y', 'a_z', 'x', 'y', 'z', 'l_t', 'r_t', 'volts', 'current'].includes(r))) {
                 // heading
-                tank_status.a_x = Math.round(msg.a_x);
-                tank_status.a_y = Math.round(msg.a_y);
-                tank_status.a_z = Math.round(msg.a_z);
+                tank_status.a_x = msg.a_x;
+                tank_status.a_y = msg.a_y;
+                tank_status.a_z = msg.a_z;
                 tank_status.x =  msg.x;
                 tank_status.y =  msg.y;
 
@@ -304,7 +304,7 @@ function connect() {
                 c_gauge.set(msg.current);
 
                 // heading
-                document.getElementById("heading").innerHTML = tank_status.a_x.toString(10).padStart(3,'0');
+                document.getElementById("heading").innerHTML = Math.round(tank_status.a_x).toString(10).padStart(3,'0');
 
                 // update position log
                 pos_log.unshift({x: msg.x, y: msg.y});
