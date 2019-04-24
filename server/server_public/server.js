@@ -4,7 +4,7 @@ let arena_grid_factor = 5;
 let ws = null;
 let available_games = { 'Generic': { 'map_features': [] } };
 let map_features = [];
-let current_gid = 0;
+let selected_gid = 0;
 let objects = {};
 
 function isPrivateAddress(ipaddress) {
@@ -126,16 +126,18 @@ function draw(ts) {
     // draw map_features
     ctx.strokeStyle = "#333333";
     for (i = 0; i < map_features.length; i++) {
-        if (map_features[i]['type'] == 'line') {
-            ctx.lineWidth = 0.5;
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(map_features[i].from.x, map_features[i].from.y);
-            ctx.lineTo(map_features[i].to.x, map_features[i].to.y);
-            ctx.stroke();
-        } else if (map_features[i]['type'] == 'point') {
-            ctx.fillStyle = "green";
-            ctx.fillRect(map_features[i]['pos']['x'] - 2, map_features[i]['pos']['y'] - 2, 4, 4);
+        if (map_features[i]['gid'] == 0 || map_features[i]['gid'] == selected_gid) {
+            if (map_features[i]['type'] == 'line') {
+                ctx.lineWidth = 0.5;
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(map_features[i].from.x, map_features[i].from.y);
+                ctx.lineTo(map_features[i].to.x, map_features[i].to.y);
+                ctx.stroke();
+            } else if (map_features[i]['type'] == 'point') {
+                ctx.fillStyle = "green";
+                ctx.fillRect(map_features[i]['pos']['x'] - 2, map_features[i]['pos']['y'] - 2, 4, 4);
+            }
         }
     }
 
@@ -202,49 +204,53 @@ function connect() {
     };
 
     ws.onmessage = function(event) {
-        msg = JSON.parse(event.data);
-        if (msg['t']) {
-            if (msg['t'] == 'tick') {
-                if (current_gid != msg['gid']) {
-                    $('#selected_gid').text(available_games[msg['gid']]['name']);
-                    current_gid = msg['gid'];
-                }
+        try {
+            msg = JSON.parse(event.data);
+            if (msg['t']) {
+                if (msg['t'] == 'tick') {
+                    if (selected_gid != msg['gid']) {
+                        $('#selected_gid').text(available_games[msg['gid']]['name']);
+                        selected_gid = msg['gid'];
+                    }
 
-                if (msg['running']) {
-                    $('#running').text('Running').addClass('btn-success').removeClass('btn-danger');
+                    if (msg['running']) {
+                        $('#running').text('Running').addClass('btn-success').removeClass('btn-danger');
 
-                } else { 
-                    $('#running').text('Stopped').removeClass('btn-success').addClass('btn-danger');
-                }
+                    } else { 
+                        $('#running').text('Stopped').removeClass('btn-success').addClass('btn-danger');
+                    }
 
-                objects = JSON.parse(msg['objects']);
+                    objects = JSON.parse(msg['objects']);
 
-                msg['tanks'] = JSON.parse(msg['tanks']);
-                for (var tank in msg['tanks']) {
-                    if (msg['tanks'][tank].pos) {
-                        if (pos_log[tank] == undefined)
-                            pos_log[tank] = [];
+                    msg['tanks'] = JSON.parse(msg['tanks']);
+                    for (var tank in msg['tanks']) {
+                        if (msg['tanks'][tank].pos) {
+                            if (pos_log[tank] == undefined)
+                                pos_log[tank] = [];
 
-                        if (pos_log[tank].length >= 50)
-                            pos_log[tank] = pos_log[tank].slice(1);
+                            if (pos_log[tank].length >= 50)
+                                pos_log[tank] = pos_log[tank].slice(1);
 
-                        pos_log[tank].push({x: msg['tanks'][tank].pos[0], y: msg['tanks'][tank].pos[1]});
+                            pos_log[tank].push({x: msg['tanks'][tank].pos[0], y: msg['tanks'][tank].pos[1]});
+                        }
                     }
                 }
-            }
 
-            else if (msg['t'] == 'game_config') {
-                if (msg['config'] && msg['config']['map_features'])
-                    map_features = msg['config']['map_features'];
-            }
+                else if (msg['t'] == 'game_config') {
+                    if (msg['config'] && msg['config']['map_features'])
+                        map_features = msg['config']['map_features'];
+                }
 
-            else if (msg['t'] == 'available_games') {
-                available_games = msg['available_games'];
-                $('#gids').empty()
-                Object.keys(msg['available_games']).forEach(key => {
-                    $('#gids').append('<a class="dropdown-item" href="#" onclick="change_game(' + key + ');return false;">' + msg['available_games'][key]['name'] + '</a>');
-                });
+                else if (msg['t'] == 'available_games') {
+                    available_games = msg['available_games'];
+                    $('#gids').empty()
+                    Object.keys(msg['available_games']).forEach(key => {
+                        $('#gids').append('<a class="dropdown-item" href="#" onclick="change_game(' + key + ');return false;">' + msg['available_games'][key]['name'] + '</a>');
+                    });
+                }
             }
+        } catch (err) {
+            console.log(err);
         }
     };
 }

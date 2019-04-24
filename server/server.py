@@ -4,26 +4,12 @@ import base64, cv2, datetime, imutils, json, math, numpy as np, os, pickle, pigp
 from multiprocessing import Process, Manager, Queue, set_start_method
 from multiprocessing.managers import BaseManager
 from imutils import contours
-from pykalman import KalmanFilter
 from statistics import median
 import tornado.ioloop
 import tornado.web as web
 import tornado.websocket
 
-serial_port_enabled = True
-serial_port_mode = "UWB"
-serial_port_baud = 115200
-serial_port = "/dev/serial0"
-
 camera_enabled = True
-
-transition_matrix = [[1, 1, 0, 0],
-                     [0, 1, 0, 0],
-                     [0, 0, 1, 1],
-                     [0, 0, 0, 1]]
-
-observation_matrix = [[1, 0, 0, 0],
-                      [0, 0, 1, 0]]
 
 def translate(value, leftMin, leftMax, rightMin, rightMax):
     leftSpan = leftMax - leftMin
@@ -158,14 +144,16 @@ class Game(object):
     # ARENA
     # load game configuration from pickle file
     def load_game_config(self):
-        if os.path.isfile('game.conf'):
-            print("Loaded game.conf.")
-            with open('game.conf','rb') as f:
-                cd = pickle.load(f)
-                self.game_config = cd
-                print(self.game_config)
-        else:
-            self.game_config = {'corners': {'tl': [0,0], 'tr': [640,0], 'bl': [0, 480], 'br': [640, 480]}, 'map_features': {}}
+        self.game_config = {'corners': {'tl': [0,0], 'tr': [640,0], 'bl': [0, 480], 'br': [640, 480]}, 'map_features': {}}
+        try:
+            if os.path.isfile('game.conf'):
+                print("Loaded game.conf.")
+                with open('game.conf','rb') as f:
+                    cd = pickle.load(f)
+                    self.game_config = cd
+            return True
+        except:
+            return False
 
     # helper to send config to a subprocess
     def get_game_config(self):
@@ -173,8 +161,12 @@ class Game(object):
 
     # write game configuration to file
     def save_game_config(self):
-        with open('game.conf', 'wb') as f:
-            pickle.dump(self.game_config, f)
+        try:
+            with open('game.conf', 'wb') as f:
+                pickle.dump(self.game_config, f)
+            return True
+        except:
+            return False
 
     # helper to send calibration data to subprocess
     def get_calibration(self):
@@ -210,7 +202,7 @@ class Game(object):
 
     def update_tank_pos(self, tid, pos):
         if tid in self.tanks.keys():
-            self.tanks[tid]['pos'] = [round(pos[0]), round(pos[1])]
+            self.tanks[tid]['pos'] = pos
 
     # find the tank with the oldest poll time
     def get_oldest_poll_tid(self):
@@ -343,8 +335,8 @@ class Location_Cam(Process):
                 closest_bs['stream'][-1] = 1
                 closest_bs['seen_count'] += 1
                 if closest_bs['tid'] > -1:
-                    tank_pos = [ translate(pos[0], self.corners['tl'][0], self.corners['tr'][0], 0, 200),
-                            translate(pos[1], self.corners['tl'][1], self.corners['bl'][1], 0, 200) ]
+                    tank_pos = [ round(translate(pos[0], self.corners['tl'][0], self.corners['tr'][0], 0, 200), 3),
+                            round(translate(pos[1], self.corners['tl'][1], self.corners['bl'][1], 0, 200), 3) ]
 
                     # update tank position
                     self.g.update_tank_pos(closest_bs['tid'], tank_pos)
@@ -452,132 +444,6 @@ class Location_Cam(Process):
 
         cv2.destroyAllWindows()
 
-class UWB(Process):
-    def __init__(self, to_uwb, to_main):
-        super(UWB, self).__init__()
-        self.to_uwb = to_uwb
-        self.to_main = to_main
-
-    def shutdown(self, signal, frame):
-        print('Stopping UWB.')
-        self.running = False
-
-    def enable_shell_mode(self):
-        if self.s1 == None:
-            return
-        print ('Enabling shell!')
-        self.pi.serial_write(self.s1, 'reset\r')
-        time.sleep(5)
-        self.pi.serial_write(self.s1, '\r')
-        time.sleep(0.1)
-        self.pi.serial_write(self.s1, '\r')
-        time.sleep(2)
-        self.pi.serial_write(self.s1, "lep\r")
-
-    def process_shell_pkt(self, pkt):
-        if len(pkt) == 0:
-            return
-        pkt = pkt.split(b',')
-        if pkt[0] == b'POS' and len(pkt) == 8:
-            tank_id = bytearray(pkt[2]).decode('utf-8')
-            x = float(bytearray(pkt[3]).decode('utf-8'))*100
-            y = float(bytearray(pkt[4]).decode('utf-8'))*100
-            z = float(bytearray(pkt[5]).decode('utf-8'))*100
-
-            if tank_id not in self.tanks.keys():
-                self.tanks[tank_id] = { 'x': 0, 'y': 0, 'z': 0, 'posm_x': [], 'posm_y': [], 'posm_z': [], 'pos_history': [], 'kf': None }
-
-            self.tanks[tank_id]['x'] = x
-            self.tanks[tank_id]['y'] = y
-            self.tanks[tank_id]['z'] = z
-
-            if len(self.tanks[tank_id]['pos_history']) < 20:
-                self.tanks[tank_id]['pos_history'].append((x,y))
-            elif self.tanks[tank_id]['kf'] == None:
-                print('building kf')
-                measurements = np.asarray(self.tanks[tank_id]['pos_history'])
-                kf = KalmanFilter(transition_matrices = transition_matrix,
-                        observation_matrices = observation_matrix,
-                        initial_state_mean = [measurements[0, 0], 0, measurements[0, 1], 0])
-                kf = kf.em(measurements, n_iter=5)
-                self.tanks[tank_id]['kf'] = KalmanFilter(transition_matrices = transition_matrix,
-                        observation_matrices = observation_matrix,
-                        initial_state_mean = [measurements[0, 0], 0, measurements[0, 1], 0],
-                        observation_covariance = 10*kf.observation_covariance,
-                        em_vars=['transition_covariance', 'initial_state_covariance'])
-                self.tanks[tank_id]['kf'] = self.tanks[tank_id]['kf'].em(measurements, n_iter=5)
-                self.tanks[tank_id]['means'], self.tanks[tank_id]['covariances'] = self.tanks[tank_id]['kf'].filter(measurements)
-                self.tanks[tank_id]['means'] = self.tanks[tank_id]['means'][-1, :]
-                self.tanks[tank_id]['covariances'] =  self.tanks[tank_id]['covariances'][-1, :]
-            else:
-                self.tanks[tank_id]['means'], self.tanks[tank_id]['covariances'] = self.tanks[tank_id]['kf'].filter_update(filtered_state_mean = self.tanks[tank_id]['means'],
-                        filtered_state_covariance = self.tanks[tank_id]['covariances'], observation = (x,y))
-                x = self.tanks[tank_id]['means'][0]
-                y = self.tanks[tank_id]['means'][2]
-
-            self.tanks[tank_id]['posm_x'].append(x)
-            self.tanks[tank_id]['posm_y'].append(y)
-            self.tanks[tank_id]['posm_z'].append(z)
-
-            if len(self.tanks[tank_id]['posm_x']) > 5:
-                self.tanks[tank_id]['posm_x'] = self.tanks[tank_id]['posm_x'][-5:]
-                self.tanks[tank_id]['posm_y'] = self.tanks[tank_id]['posm_y'][-5:]
-                self.tanks[tank_id]['posm_z'] = self.tanks[tank_id]['posm_z'][-5:]
-
-            #self.to_main.put({ 'id': tank_id, 'x': median(self.tanks[tank_id]['posm_x']), 'y': median(self.tanks[tank_id]['posm_y']), 'z': median(self.tanks[tank_id]['posm_z']) })
-            self.to_main.put({ 't': 'pos', 'id': tank_id, 'x': x, 'y': y, 'z': median(self.tanks[tank_id]['posm_z']) })
-
-    def shell_recv(self):
-        if self.s1 == None:
-            return
-        num_bytes = 1
-        buf = bytearray()
-        while num_bytes > 0:
-            num_bytes, rx_bytes = self.pi.serial_read(self.s1, 256)
-            buf.extend(rx_bytes)
-        if len(buf) > 0:
-            for pkt in buf.split(b'\r\n'):
-                self.process_shell_pkt(pkt)
-
-    def run(self):
-        self.running = True
-        signal.signal(signal.SIGINT, self.shutdown)
-        
-        self.heartbeat_time = time.time() * 1000
-        self.position_time = time.time() * 1000
-
-        self.tanks = {}
-
-        self.pi = pigpio.pi('localhost')
-
-        if serial_port_enabled and serial_port_mode == "UWB":
-            self.s1 = self.pi.serial_open(serial_port, serial_port_baud)
-        else:
-            self.s1 = None
-
-        self.enable_shell_mode()
-        print("Running!")
-        while self.running:
-            curr_time = time.time() * 1000
-            self.shell_recv()
-
-            # get position info every 100ms
-            if curr_time - self.position_time > 100:
-                self.position_time = curr_time
-
-            while not self.to_uwb.empty():
-                self.failsafe_time = curr_time
-                msg = self.to_uwb.get()
-                if msg['t'] == "shutdown":
-                    self.running = False
-
-                #semd status back
-                if not self.to_main.full() and time.time() * 1000 - self.heartbeat_time > 200:
-                    self.heartbeat_time = time.time() * 1000
-            time.sleep(0.01)
-
-        print("Stopping UWB.")
-        self.pi.serial_close(self.s1)
 
 class Webserver(Process):
     def __init__(self, to_tornado, to_main, g):
@@ -707,11 +573,6 @@ def main():
     to_cam = Queue()
     to_tornado = Queue()
     to_main = Queue(maxsize=64)
-
-    #start uwb
-    #if serial_port_enabled and serial_port_mode == "UWB":
-    #    uwb = UWB(to_uwb, to_main)
-    #    uwb.start()
 
     #start camera
     if camera_enabled:
