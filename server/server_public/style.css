@@ -4,6 +4,7 @@ body {
 	margin : 0;
 	background-color: #000000;
     padding-top: 50px;
+    padding-bottom: 50px;
 }
 @font-face { 
     font-family: "ocr-a-std";

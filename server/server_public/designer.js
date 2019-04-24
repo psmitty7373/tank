@@ -4,6 +4,10 @@ let arena_grid_factor = 5;
 let state = null;
 let first_point = null;
 let ws = null;
+let available_games = { 'Generic': { 'map_features': [] } };
+let selected_gid = 0;
+let selected_oid = [0, 0];
+let selected_type = 'line';
 
 let anchors = [
     {id: 'a', x: 0, y: 0, z: 0 },
@@ -13,7 +17,7 @@ let anchors = [
 ];
 let pos_log = [];
 let FPS = 1000/60;
-let walls = [];
+let map_features = [];
 
 let cursor_pos = { x: -1, y: -1 };
 
@@ -38,25 +42,49 @@ function handle_mouse_move(evt) {
     }
 }
 
+function count_oid(gid, oid, max_count) {
+    count = 0;
+    for (var i = map_features.length - 1; i >= 0; i--) {
+        if (map_features[i]['gid'] == gid && map_features[i]['oid'] == oid) {
+            if (count + 1 >= max_count) {
+                map_features.splice(i, 1);
+            }
+            else
+                count += 1;
+        }
+    }
+    console.log(count);
+}
+
 function handle_mouse_click(evt) {
-    if (state == null) {
-        first_point = { x: Math.round(cursor_pos.x / 10) * 10, y: Math.round(cursor_pos.y / 10) * 10 };
-        state = 'first';
-    } else if (state == 'first') {
-        walls.push({from: first_point, to: {x: Math.round(cursor_pos.x / 10) * 10, y: Math.round(cursor_pos.y / 10) * 10 }});
-        state = null;
-        first_point = null;
+    // walls
+    if (selected_oid[0] == 0 && selected_oid[1] == 0) {
+        if (state == null) {
+            first_point = { x: Math.round(cursor_pos.x / 5) * 5, y: Math.round(cursor_pos.y / 5) * 5 };
+            state = 'first';
+        } else if (state == 'first') {
+            map_features.push({oid: 0, gid:0, type: 'line', from: first_point, to: {x: Math.round(cursor_pos.x / 5) * 5, y: Math.round(cursor_pos.y / 5) * 5 }});
+            state = null;
+            first_point = null;
+        }
+    // other objects
+    } else {
+        // ensure max counts are followed
+        if (available_games[selected_gid]['map_features'][selected_oid[1]]['max_count'] > 0) {
+            count_oid(selected_oid[0], selected_oid[1], available_games[selected_gid]['map_features'][selected_oid[1]]['max_count']);
+        }
+        map_features.push({oid: selected_oid[1], gid: selected_oid[0], type: available_games[selected_gid]['map_features'][selected_oid[1]]['type'], pos: {x: Math.round(cursor_pos.x / 5) * 5, y: Math.round(cursor_pos.y / 5) * 5 }});
     }
 }
 
-function save_walls() {
+function save_map() {
     if (ws) {
-        ws.send(JSON.stringify({'t': 'wall_update', 'wall_data': JSON.stringify(walls) }));
+        ws.send(JSON.stringify({'t': 'map_update', 'map_features': JSON.stringify(map_features) }));
     }
 }
 
-function clear_walls() {
-    walls = [];
+function clear_map() {
+    map_features = [];
 }
 
 function draw(ts) {
@@ -114,20 +142,27 @@ function draw(ts) {
         ctx.fillRect(anchors[i].x - 2, anchors[i].y - 2, 4, 4);
     }
 
-    // draw walls
+    // draw map_features
     ctx.strokeStyle = "#333333";
-    for (i = 0; i < walls.length; i++) {
-        ctx.lineWidth = 0.5;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(walls[i].from.x, walls[i].from.y);
-        ctx.lineTo(walls[i].to.x, walls[i].to.y);
-        ctx.stroke();
+    for (i = 0; i < map_features.length; i++) {
+        if (map_features[i]['gid'] == 0 || map_features[i]['gid'] == selected_gid) {
+            if (map_features[i]['type'] == 'line') {
+                ctx.lineWidth = 0.5;
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(map_features[i].from.x, map_features[i].from.y);
+                ctx.lineTo(map_features[i].to.x, map_features[i].to.y);
+                ctx.stroke();
+            } else if (map_features[i]['type'] == 'point') {
+                ctx.fillStyle = "green";
+                ctx.fillRect(map_features[i]['pos']['x'] - 2, map_features[i]['pos']['y'] - 2, 4, 4);
+            }
+        }
     }
 
     // draw grid
-    for (var x = 0; x <= arena_width; x += 10) {
-        for (var y = 0; y <= arena_height; y += 10) {
+    for (var x = 0; x <= arena_width; x += 5) {
+        for (var y = 0; y <= arena_height; y += 5) {
             if (cursor_pos.x < x + 2 && cursor_pos.x > x - 2 && cursor_pos.y < y + 2 && cursor_pos.y > y - 2) {
                 ctx.fillStyle = "red";
             } else if (first_point && x == first_point.x && y == first_point.y) {
@@ -152,6 +187,32 @@ function draw(ts) {
 }
 
 
+function change_gid(type) {
+    selected_gid = type;
+    change_oid(0, 0);
+    $('#selected_gid').text(available_games[type]['name']);
+    $('#oids').empty()
+    $('#oids').append('<a class="dropdown-item" href="#" onclick="change_oid(0, 0);return false;">Wall</a>');
+    Object.keys(available_games[type]['map_features']).forEach(key => {
+        $('#oids').append('<a class="dropdown-item" href="#" onclick="change_oid(' + type + ',' + key + ');return false;">' + available_games[type]['map_features'][key]['name'] + '</a>');
+    });
+}
+
+
+function change_oid(gid, oid) {
+    selected_oid = [gid, oid];
+    if (gid == 0 && oid == 0) {
+        $('#selected_oid').text('Wall');
+        selected_type = 'line';
+    } else {
+        $('#selected_oid').text(available_games[selected_gid]['map_features'][oid]['name']);
+        selected_type = available_games[selected_gid]['map_features'][oid]['type'];
+        state = null;
+        first_point = null;
+    }
+}
+
+
 function connect() {
     websocket_url = "ws://" + location.hostname + ':8000/ws';
     ws = new WebSocket(websocket_url);
@@ -169,9 +230,16 @@ function connect() {
     ws.onmessage = function(event) {
         msg = JSON.parse(event.data);
         if (msg['t']) {
-            if (msg['t'] == 'arena_config') {
-                if (msg['config'] && msg['config']['walls'])
-                    walls = msg['config']['walls'];
+            if (msg['t'] == 'game_config') {
+                if (msg['config'] && msg['config']['map_features'])
+                    map_features = msg['config']['map_features'];
+            }
+            else if (msg['t'] == 'available_games') {
+                available_games = msg['available_games'];
+                $('#gids').empty()
+                Object.keys(msg['available_games']).forEach(key => {
+                    $('#gids').append('<a class="dropdown-item" href="#" onclick="change_gid(' + key + ');return false;">' + msg['available_games'][key]['name'] + '</a>');
+                });
             }
         }
     };
@@ -184,4 +252,7 @@ function connect() {
     start_time = last_time = null;
     connect();
     requestAnimationFrame(draw);
+    $(document).ready(function() {
+        $(".dropdown-toggle").dropdown();
+    });
 })();

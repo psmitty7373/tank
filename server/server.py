@@ -31,61 +31,171 @@ def translate(value, leftMin, leftMax, rightMin, rightMax):
     valueScaled = float(value - leftMin) / float(leftSpan)
     return rightMin + (valueScaled * rightSpan)
 
-class CTF():
+
+# game types
+class Generic():
+    gid = 0
+    name = "Generic"
     def __init__(self):
+        self.map_features = {}
+        self.start_time = None
+        self.time_limit = 10 * 60
+        self.running = False
+        self.objects = {}
         return
-    
-    def tick(self):
+
+    def start(self):
+        self.running = True
+        self.start_time = time.time()
+
+    def stop(self):
+        self.running = False
+        self.start_time = None
+
+    def tick(self, tanks, config):
         return
+
+
+class CTF(Generic):
+    gid = 1
+    name = "CTF"
+    def __init__(self):
+        Generic.__init__(self)
+        self.objects = { 0: { 'name': 'flag', 'state': 'dropped', 'carried_by': 0, 'color': 'blue', 'pos': [50, 50], 'visible': True }}
+        self.flag = self.objects[0]
+        self.map_features = {
+                0: { 'name': 'Flag Start', 'type': 'point', 'max_count': 1 },
+                1: { 'name': 'Base 1', 'type': 'point', 'max_count': 1, 'team': 'blue', 'base': True },
+                2: { 'name': 'Base 2', 'type': 'point', 'max_count': 1, 'team': 'red', 'base': True }
+        }
+        self.bases = [1,2]
+        return
+
+    def start(self):
+        self.running = True
+        self.start_time = time.time()
+        self.reset_flag()
+
+    def find_closest_thing(self, things, pos, max_dist):
+        closest_dist = None
+        closest_thing = None
+
+        if type(things) == dict:
+            for tid in things.keys():
+                dist = np.linalg.norm(np.array(pos) - np.array(things[tid]['pos']))
+                if closest_thing == None or dist < closest_dist:
+                    closest_dist = dist
+                    closest_thing = tid
+            if closest_dist < max_dist:
+                return closest_thing
+
+        return False
+
+    def is_close(self, things, pos, max_dist):
+        if type(things) == list:
+            for t in things:
+                dist = np.linalg.norm(np.array(pos) - np.array(t))
+                if dist < max_dist:
+                    return True
+
+        return False
+
+    def reset_flag(self, reset_pos=True):
+        self.flag['carried_by'] = 0
+        self.flag['state'] = 'dropped'
+        if reset_pos:
+            self.flag['pos'] = [100, 100]
+
+    def tick(self, tanks, config):
+        if self.running:
+            # pickup flag
+            if self.flag['state'] == 'dropped':
+                closest_tank = self.find_closest_thing(tanks, self.flag['pos'], 10.0)
+                if closest_tank:
+                    self.flag['state'] = 'carried'
+                    self.flag['carried_by'] = closest_tank
+
+            if self.flag['state'] == 'carried':
+                if self.flag['carried_by'] in tanks.keys():
+                    self.flag['pos'] = tanks[self.flag['carried_by']]['pos']
+                    if self.is_close([ [t['pos']['x'], t['pos']['y']] for t in config['map_features'] if (t['gid'] == self.gid and t['oid'] in self.bases) ], self.flag['pos'], 10.0):
+                        self.reset_flag()
+                else:
+                    self.reset_flag(False)
+
+        return
+
+class Deathmatch(Generic):
+    gid = 2
+    name = "Deathmatch"
+    def __init__(self):
+        Generic.__init__(self)
+        self.map_features = {}
+        return
+
+    def tick(self, tanks, config):
+        return
+
+game_types = [Generic, CTF, Deathmatch]
+
 
 # master game class
 class Game(object):
     def __init__(self):
         self.tanks = {}
-        self.current_game = None
-        self.walls = []
-        self.arena_config = None
-        self.load_arena_config()
+        self.game_config = None
+        self.load_game_config()
+        self.available_games = { g.gid:g() for g in game_types }
+        self.current_game = self.available_games[0]
 
-    # load arena configuration from pickle file
-    def load_arena_config(self):
-        if os.path.isfile('arena.conf'):
-            print("Loaded arena.conf.")
-            with open('arena.conf','rb') as f:
+    # GAMES
+    def get_available_games(self):
+        res = {}
+        for i in self.available_games.keys():
+            res[i] = { 'name': self.available_games[i].name, 'map_features': self.available_games[i].map_features }
+        return res
+
+    # ARENA
+    # load game configuration from pickle file
+    def load_game_config(self):
+        if os.path.isfile('game.conf'):
+            print("Loaded game.conf.")
+            with open('game.conf','rb') as f:
                 cd = pickle.load(f)
-                self.arena_config = cd
-                print(self.arena_config)
+                self.game_config = cd
+                print(self.game_config)
         else:
-            self.arena_config = {'corners': {'tl': [0,0], 'tr': [640,0], 'bl': [0, 480], 'br': [640, 480]}, 'walls': []}
+            self.game_config = {'corners': {'tl': [0,0], 'tr': [640,0], 'bl': [0, 480], 'br': [640, 480]}, 'map_features': {}}
 
     # helper to send config to a subprocess
-    def get_arena_config(self):
-        return self.arena_config
+    def get_game_config(self):
+        return self.game_config
 
-    # write arena configuration to file
-    def save_arena_config(self):
-        with open('arena.conf', 'wb') as f:
-            pickle.dump(self.arena_config, f)
+    # write game configuration to file
+    def save_game_config(self):
+        with open('game.conf', 'wb') as f:
+            pickle.dump(self.game_config, f)
 
     # helper to send calibration data to subprocess
     def get_calibration(self):
-        return self.arena_config['corners']
+        return self.game_config['corners']
 
     def calibrate_arena(self, corners):
-        self.arena_config['corners'] = corners
-        self.save_arena_config()
+        self.game_config['corners'] = corners
+        self.save_game_config()
 
-    def get_walls(self):
-        return self.arena_config['walls']
+    def get_map_features(self):
+        return self.game_config['map_features']
 
-    def update_walls(self, walls):
-        self.arena_config['walls'] = walls
-        self.save_arena_config()
+    def update_map_features(self, map_features):
+        self.game_config['map_features'] = map_features
+        self.save_game_config()
 
+    # TANKS
     def add_tank(self, x=0, y=0, tid=0):
         if tid in self.tanks.keys():
             return
-        self.tanks[tid] = { 'pos': [x ,y], 'team': None, 'last_update': time.time(), 'last_poll': time.time() }
+        self.tanks[tid] = { 'pos': [x ,y], 'team': None, 'score': 0, 'last_update': time.time(), 'last_poll': time.time() }
 
     def touch_tank(self, tid):
         if tid in self.tanks.keys():
@@ -100,7 +210,7 @@ class Game(object):
 
     def update_tank_pos(self, tid, pos):
         if tid in self.tanks.keys():
-            self.tanks[tid]['pos'] = pos
+            self.tanks[tid]['pos'] = [round(pos[0]), round(pos[1])]
 
     # find the tank with the oldest poll time
     def get_oldest_poll_tid(self):
@@ -117,7 +227,7 @@ class Game(object):
 
     # return a copy of the tanks to a subprocess
     def get_tanks(self):
-        return json.dumps(self.tanks)
+        return json.dumps({ t: { 'pos': self.tanks[t]['pos'], 'team': self.tanks[t]['team'], 'score': self.tanks[t]['score'] } for t in self.tanks.keys() })
 
     # find a tank by position
     def find_tank(self, pos):
@@ -129,9 +239,40 @@ class Game(object):
                 closest_dist = dist
                 closest_tank = t
         if closest_dist < 20.0:
-            return closest_tank
+            return (closest_tank, closest_dist)
         else:
-            return False
+            return (False, False)
+    # GAME
+    def get_score(self):
+        if self.current_game:
+            self.current_game.get_score()
+        return
+
+    # change which game we're playing
+    def change_game(self, gid):
+        self.current_game.stop()
+        if gid in self.available_games.keys():
+            self.current_game = self.available_games[gid]
+
+    # toggle game running
+    def toggle_game(self):
+        if self.current_game.running:
+            self.current_game.stop()
+        else:
+            self.current_game.start()
+
+    # game tick
+    def tick(self):
+        # update game
+        if self.current_game:
+            self.current_game.tick(self.tanks, self.game_config)
+
+        res = {'t': 'tick', 'tid': 'broadcast', 'gid': self.current_game.gid, 'running': self.current_game.running, 'objects': json.dumps(self.current_game.objects) }
+        # send tank statuses
+        res['tanks'] = self.get_tanks()
+
+        return res
+
 
 class Location_Cam(Process):
     def __init__(self, to_cam, to_main, g):
@@ -204,8 +345,9 @@ class Location_Cam(Process):
                 if closest_bs['tid'] > -1:
                     tank_pos = [ translate(pos[0], self.corners['tl'][0], self.corners['tr'][0], 0, 200),
                             translate(pos[1], self.corners['tl'][1], self.corners['bl'][1], 0, 200) ]
+
+                    # update tank position
                     self.g.update_tank_pos(closest_bs['tid'], tank_pos)
-                    self.to_main.put({ 't': 'pos', 'tid': closest_bs['tid'], 'pos': tank_pos })
                 return
             else:
                 print('huge jump:', closest_dist)
@@ -250,7 +392,6 @@ class Location_Cam(Process):
         if now - self.last_show > 5:
 #            cv2.imshow("hsv", thresh)
             print(1 / (self.tot_time / self.frames))
-            #print(self.bitstreams)
             self.last_show = now
 
         now = time.time()
@@ -293,7 +434,6 @@ class Location_Cam(Process):
                 self.polling = False
 
             if not self.polling and now - poll_time > 2:
-                self.g.cleanup_tanks()
                 poll_time = now
                 old_tid = self.g.get_oldest_poll_tid()
                 print('Polling for:', old_tid)
@@ -462,34 +602,51 @@ class Webserver(Process):
             self.g = g
             self.connections = connections
 
+        # new connection
         def open(self):
             self.type = 'unk'
             self.tid = -1
             self.connections.add(self)
-            self.write_message(json.dumps({ 't': 'arena_config', 'config': self.g.get_arena_config() }))
+            # send current game config to new connection
+            self.write_message(json.dumps({ 't': 'game_config', 'config': self.g.get_game_config() }))
             print('connect')
      
+        # new message
         def on_message(self, message):
             msg = json.loads(message)
 
             if 't' not in msg.keys():
                 return
 
+            # new tank join
             if msg['t'] == 'join' and 'tid' in msg.keys():
                 print('adding tank', msg['tid'])
                 self.tid = msg['tid']
                 self.type = 'tank'
                 self.g.add_tank(tid=msg['tid'], x=0, y=0)
 
+            # new server join
             elif msg['t'] == 'server':
                 self.type = 'server'
+                self.write_message(json.dumps({ 't': 'available_games', 'available_games': self.g.get_available_games() }))
 
-            elif msg['t'] == 'wall_update' and 'wall_data' in msg.keys():
-                # save new walls
-                self.g.update_walls(json.loads(msg['wall_data']))
-                # blast updated walls to all clients
-                self.to_tornado.put({ 'tid': 'broadcast', 't': 'arena_config', 'config': self.g.get_arena_config() })
+            # update map_features
+            elif msg['t'] == 'map_update' and 'map_features' in msg.keys():
+                # save new map_features
+                self.g.update_map_features(json.loads(msg['map_features']))
+                # blast updated map_features to all clients
+                self.to_tornado.put({ 'tid': 'broadcast', 't': 'game_config', 'config': self.g.get_game_config() })
 
+            # change game type
+            elif msg['t'] == 'change_game' and 'gid' in msg.keys():
+                print('change_game!')
+                self.g.change_game(msg['gid'])
+
+            # toggle game
+            elif msg['t'] == 'toggle_game':
+                self.g.toggle_game()
+
+            # heartbeat
             elif msg['t'] == 'hb' and 'tid' in msg.keys():
                 self.g.touch_tank(msg['tid'])
 
@@ -500,13 +657,12 @@ class Webserver(Process):
             self.connections.remove(self)
 
     def update_sockets(self):
+        # send tank updates
         if time.time() - self.last_update > 0.1:
             self.last_update = time.time()
             tanks = self.g.get_tanks()
-            for client in self.connections:
-                if client.type == 'server' or client.type == 'unk':
-                    client.write_message(json.dumps({'t': 'update', 'tanks': tanks}))
 
+        # clear tornado queue
         while not self.to_tornado.empty():
             msg = self.to_tornado.get()
             for client in self.connections:
@@ -566,9 +722,23 @@ def main():
     web = Webserver(to_tornado, to_main, g)
     web.start()
 
+    fast_tick = time.time()
+    slow_tick = fast_tick
     print('Starting main loop.')
     while running:
         try:
+            now = time.time()
+            # tick game
+            if now - fast_tick > (1 / 30):
+                msg = g.tick()
+                to_tornado.put(msg)
+                fast_tick = now
+
+            if now - slow_tick > 1:
+                g.cleanup_tanks()
+                slow_tick = now
+
+            # clear queue
             while not to_main.empty():
                 msg = to_main.get()
                 if msg['t'] == 'poll' or msg['t'] == 'pos':
@@ -577,6 +747,7 @@ def main():
                     to_cam.put(msg)
                 elif msg['t'] == 'cam':
                     to_tornado.put(msg)
+
             time.sleep(0.01)
 
         except KeyboardInterrupt:

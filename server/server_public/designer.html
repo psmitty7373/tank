@@ -13,40 +13,48 @@
             </button>
             <div class="collapse navbar-collapse" id="navbarsTank">
                 <ul class="navbar-nav mr-auto">
-                    <li class="nav-item active">
+                    <li class="nav-item">
                         <a class="nav-link" href="/index.html">Home</a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="/calibrate.html">Calibrate</a>
                     </li>
-                    <li class="nav-item">
+                    <li class="nav-item active">
                         <a class="nav-link" href="/designer.html">Designer</a>
                     </li>
                 </ul>
             </div>
         </nav>
+        
+        <div class="container" id="container">
+            <canvas id="canvas"></canvas>
+        </div>
 
         <nav class="navbar navbar-expand-md navbar-dark bg-dark fixed-bottom">
-            <ul class="navbar-nav mr-auto">
+            <ul class="navbar-nav mr-auto nav-pills">
+                <li  class="nav-item">
+                    <a class="nav-link" href="#" onclick="clear_map(); return false;">Clear</a>
+                </li>
+                <li  class="nav-item">
+                    <a class="nav-link" href="#" onclick="save_map(); return false;">Save</a>
+                    </li>
                 <li class="nav-item dropup">
                     <a class="nav-link dropdown-toggle" href="#" id="navbarDropdownGameType" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"><span id="selected_gid">Generic</span></a>
                     <div class="dropdown-menu" aria-labelledby="navbarDropdown" id="gids">
                         <a class="dropdown-item" href="#">Generic</a>
                     </div>
                 </li>
-                <li  class="nav-item">
-                    <button type="button" class="btn btn-success" href="#" onclick="toggle_game(); return false;" id="running">Running</button>
+                <li class="nav-item dropup">
+                    <a class="nav-link dropdown-toggle" href="#" id="navbarDropdownObjectType" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"><span id="selected_oid">Walls</span></a>
+                    <div class="dropdown-menu" aria-labelledby="navbarDropdown" id="oids">
+                        <a class="dropdown-item" href="#">Walls</a>
+                    </div>
                 </li>
             </ul>
         </nav>
 
-        <div class="container" id="container">
-            <canvas id="canvas"></canvas>
-            <div id="interface"></div>
-            </div>
-        </div>
         <script src="jquery.min.js"></script>
         <script src="bootstrap.min.js"></script>
-        <script src="server.js"></script>
+        <script src="designer.js"></script>
     </body>
 </html>
