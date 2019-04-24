@@ -66,7 +66,7 @@ class CTF(Generic):
         closest_dist = None
         closest_thing = None
 
-        if type(things) == dict:
+        if type(things) == dict and len(things) > 0:
             for tid in things.keys():
                 dist = np.linalg.norm(np.array(pos) - np.array(things[tid]['pos']))
                 if closest_thing == None or dist < closest_dist:
@@ -151,6 +151,7 @@ class Game(object):
                 with open('game.conf','rb') as f:
                     cd = pickle.load(f)
                     self.game_config = cd
+
             return True
         except:
             return False
@@ -474,9 +475,18 @@ class Webserver(Process):
             self.tid = -1
             self.connections.add(self)
             # send current game config to new connection
-            self.write_message(json.dumps({ 't': 'game_config', 'config': self.g.get_game_config() }))
+            self.send_message(json.dumps({ 't': 'game_config', 'config': self.g.get_game_config() }))
             print('connect')
-     
+
+        def send_message(self, msg):
+            try:
+                self.write_message(msg)
+                return True
+            except:
+                print('send error')
+                self.close()
+                return False
+
         # new message
         def on_message(self, message):
             msg = json.loads(message)
@@ -494,7 +504,7 @@ class Webserver(Process):
             # new server join
             elif msg['t'] == 'server':
                 self.type = 'server'
-                self.write_message(json.dumps({ 't': 'available_games', 'available_games': self.g.get_available_games() }))
+                self.send_message(json.dumps({ 't': 'available_games', 'available_games': self.g.get_available_games() }))
 
             # update map_features
             elif msg['t'] == 'map_update' and 'map_features' in msg.keys():
@@ -533,9 +543,9 @@ class Webserver(Process):
             msg = self.to_tornado.get()
             for client in self.connections:
                 if ('tid' in msg.keys() and client.tid == msg['tid']) or ('tid' in msg.keys() and msg['tid'] == 'broadcast'):
-                    client.write_message(json.dumps(msg))
+                    client.send_message(json.dumps(msg))
                 elif 'tid' not in msg.keys() and client.type == 'server':
-                    client.write_message(json.dumps(msg))
+                    client.send_message(json.dumps(msg))
 
     def signal_handler(self, signal, frame):
         print('Stopping Webserver.')
