@@ -1,12 +1,10 @@
 #!/usr/bin/python3
 
-import json, math, pickle, pigpio, pfilter, os, signal, struct, time
+import json, math, pickle, pigpio, os, signal, struct, time
 from hashlib import md5
 from multiprocessing import Process
 from multiprocessing import Queue
 from multiprocessing import set_start_method
-from functools import partial
-from statistics import median
 import tornado.ioloop
 import tornado.web as web
 import tornado.websocket
@@ -25,10 +23,6 @@ left_pwm_r = 17
 
 min_throttle = 50.0
 
-serial_port_enabled = False
-serial_port_mode = "UWB"
-serial_port_baud = 115200
-serial_port = "/dev/serial0"
 imu_enabled = False
 current_enabled = False
 server_url = "ws://192.168.97.130:8000/ws"
@@ -85,7 +79,8 @@ class Tank(Process):
     import INA219
     def __init__(self, to_tank, to_tornado, to_main):
         super(Tank, self).__init__()
-        self.arena_config = {'corners': {'tl': [0,0], 'tr': [640,0], 'bl': [0, 480], 'br': [640, 480]}, 'walls': []}
+        self.game_config = {'corners': {'tl': [0,0], 'tr': [640,0], 'bl': [0, 480], 'br': [640, 480]}, 'map_features': []}
+        self.objects = {}
         self.to_tank = to_tank
         self.to_main = to_main
         self.to_tornado = to_tornado
@@ -93,48 +88,6 @@ class Tank(Process):
     def shutdown(self, signal, frame):
         print('Stopping tank.')
         self.running = False
-
-    def update_uwb(self):
-        if not serial_port_enabled or not serial_port_mode == "UWB":
-            return
-        rlv_type = 0
-        rlv_payload = b""
-        num_bytes, rx_bytes = self.pi.serial_read(self.s1, 2)
-        if num_bytes == 2:
-            rlv_type, rlv_payload_len = struct.unpack('<bb', rx_bytes)
-            if rlv_payload_len > 0:
-                num_bytes, rlv_payload = self.pi.serial_read(self.s1, rlv_payload_len)
-        elif num_bytes == 0:
-            self.pi.serial_write(self.s1, '\x32\x00')
-        if not rlv_type == 0:
-            self.process_rlv_pkt({ 'rlv_type': rlv_type, 'rlv_payload': rlv_payload })
-
-    def process_rlv_pkt(self, pkt):
-        print(pkt)
-        if pkt['rlv_type'] == 0:
-            return
-        elif pkt['rlv_type'] == 0x5a:
-            status = struct.unpack('<b', pkt['rlv_payload'])[0]
-            if status & 1:
-                self.pos_ready = True
-        elif pkt['rlv_type'] == 65 and len(pkt['rlv_payload']) == 13:
-            self.pos_x, self.pos_y, self.pos_z, self.pos_quality = struct.unpack('<lllb', pkt['rlv_payload'])
-            self.posm_x.append(self.pos_x)
-            self.posm_y.append(self.pos_y)
-            self.posm_z.append(self.pos_z)
-            # median position filter
-            if len(self.posm_x) > 5:
-                self.posm_x = self.posm_x[-5:]
-                self.posm_y = self.posm_y[-5:]
-                self.posm_z = self.posm_z[-5:]
-            self.pos_x = self.pos_x / 1000.0
-            self.pos_y = self.pos_y / 1000.0
-            self.pos_z = self.pos_z / 1000.0
-        elif pkt['rlv_type'] == 73:
-            num_distances = struct.unpack('<b', pkt['rlv_payload'][:1])[0]
-            for i in range(0, num_distances):
-                uwb_addr, distance, quality, pos_x, pos_y, pos_z, pos_quality = struct.unpack('<Hlblllb', pkt['rlv_payload'][1 + i * 20: 1 + (i+1) * 20])
-                self.pf.addRangeMeasurement(uwb_addr, [pos_x/1000.0, pos_y/1000.0, pos_z/1000.0], distance/1000.0, 0.3)
 
     def run(self):
         print('Starting tank.')
@@ -149,12 +102,6 @@ class Tank(Process):
         #init weapon
         self.weapon = self.laser.laser(self.pi, 25)
         self.weapon_ready = True
-
-        if serial_port_enabled:
-            print("Opening serial port.")
-            self.s1 = self.pi.serial_open(serial_port, serial_port_baud)
-        else:
-            self.s1 = None
 
         #init imu
         if imu_enabled:
@@ -224,9 +171,6 @@ class Tank(Process):
 
         # messaging
 
-        #particle filter
-        self.pf = pfilter.ParticleFilter(200, 0.1, (10, 10, 10))
-
         print("Running!")
         while self.running:
             curr_time = time.time() * 1000
@@ -242,18 +186,6 @@ class Tank(Process):
             if not self.weapon_ready:
                 if curr_time - self.weapon_reload_time > 5000:
                     self.weapon_ready = True
-
-            # UWB --------------------------------------------------------------------
-            # poll uwb serial port
-            self.update_uwb()
-
-            # position info ready
-            if self.pos_ready:
-                self.pos_ready = False
-                self.pi.serial_write(self.s1, '\x02\x00') #get curr position
-#                self.pi.serial_write(self.s1, '\x0c\x00') #get measurements
-                #self.pf.update()
-                self.ppos_x, self.ppos_y, self.ppos_z = self.pf.getEstimate()
 
             # IMU --------------------------------------------------------------------
             # poll imu
@@ -276,29 +208,47 @@ class Tank(Process):
             while not self.to_tank.empty():
                 self.failsafe_time = curr_time
                 msg = self.to_tank.get()
+
                 if 't' in msg.keys():
-                    if msg['t'] == "throttle":
+                    # throttle
+                    if msg['t'] == "throttle" and 'throttle' in msg.keys():
                         self.r_t, self.l_t = msg['throttle']
+
+                    # fire
                     elif msg['t'] == "fire_weapon":
                         self.weapon_reload_time = curr_time
                         self.weapon_ready = False
                         self.weapon.send(ord('A'))
+
+                    # shutdown
                     elif msg['t'] == "shutdown":
                         self.running = False
-                    elif msg['t'] == 'pos' and 'pos' in msg.keys():
-                        self.pos_x = msg['pos'][0]
-                        self.pos_y = msg['pos'][1]
-                        self.pos_z = 0
+
+                    # game tick
+                    elif msg['t'] == 'tick':
+                        if 'tanks' in msg.keys():
+                           tanks = json.loads(msg['tanks'])
+                           for t in tanks.keys():
+                               if int(t) == ID:
+                                   self.pos_x = tanks[t]['pos'][0]
+                                   self.pos_y = tanks[t]['pos'][1]
+                                   self.pos_z = 0
+                        
+                        if 'objects' in msg.keys():
+                            self.objects = json.loads(msg['objects'])
+
                     # handle a poll request
                     elif msg['t'] == 'poll':
                         self.trans.poll()
-                    # if we get an arena_config, blast it out
-                    elif msg['t'] == 'arena_config' and 'config' in msg.keys():
-                        self.arena_config = msg['config']
+
+                    # if we get an game_config, blast it out
+                    elif msg['t'] == 'game_config' and 'config' in msg.keys():
+                        self.game_config = msg['config']
                         self.to_tornado.put(msg)
-                    # when a client connects send the current arena_config
+
+                    # when a client connects send the current game_config
                     elif msg['t'] == 'connect':
-                        self.to_tornado.put({ 't': 'arena_config', 'config': self.arena_config })
+                        self.to_tornado.put({ 't': 'game_config', 'config': self.game_config })
 
                 # right motor
                 if self.r_t > 0: # forward
@@ -395,13 +345,11 @@ class Tank(Process):
             # send current status
             if not self.to_tornado.full() and time.time() * 1000 - self.heartbeat_time > 100:
                 self.heartbeat_time = time.time() * 1000
-                self.to_tornado.put({ 't': 'status', 'current': self.current, 'volts': self.volts, 'l_t': self.l_t, 'r_t': self.r_t, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality })
+                self.to_tornado.put({ 't': 'status', 'current': self.current, 'volts': self.volts, 'l_t': self.l_t, 'r_t': self.r_t, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality, 'objects': self.objects })
 
             # prevent busy waiting
             time.sleep(0.01)
 
-        if serial_port_enabled:
-            self.pi.serial_close(self.s1)
         print('Tank done.')
         self.pi.stop()
 
@@ -455,7 +403,8 @@ class WebsocketClient(Thread):
 
     def on_message(self, msg):
         if msg == None:
-            self.ws.close()
+            if self.ws:
+                self.ws.close()
             self.ws = None
             time.sleep(2)
             self.connect()

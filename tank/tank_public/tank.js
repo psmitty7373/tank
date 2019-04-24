@@ -12,11 +12,11 @@ let anchors = [
         {id: 'c', x: 200, y: 200, z: 0},
         {id: 'd', x: 200, y: 0, z: 0}
 ];
-let walls = [];
+let map_features = [];
 
 let pos_log = [];
 let joystick = { x: 0, y: 0 };
-let tank_status = { a_x: 0, a_y: 0, a_z: 0 };
+let tank_status = { x: 0, y: 0, a_x: 0, a_y: 0, a_z: 0 };
 let FPS = 1000/60;
 let CPS = 1000/20;
 let last_frame = 0;
@@ -26,6 +26,8 @@ let time_diff_control = 0;
 let video = document.getElementById('remoteVideo');
 let reticle_color = "green";
 let weapon_ready = true;
+let icons = {};
+let objects = {};
 
 // GAUGES
 let lt_gauge = null;
@@ -46,14 +48,16 @@ function get_center() {
 }
 
 // RETICLE
-function draw_reticle() {
+function draw_hud() {
     // reticle
     let canvas = document.getElementById("hud_canvas");
     canvas.width = canvas.offsetWidth;
     canvas.height = canvas.offsetHeight;
+
     ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.beginPath();
+
     if (reticle_color == "green")
         ctx.strokeStyle = "#00FF00";
     else
@@ -81,6 +85,28 @@ function draw_reticle() {
     ctx.moveTo(canvas.width/2, canvas.height/2 - 10);
     ctx.lineTo(canvas.width/2, canvas.height/2 - 25);
     ctx.stroke();
+
+    // draw objects
+    keys = Object.keys(objects);
+    for (i = 0; i < keys.length; i++) {
+        azim_to_obj = Math.atan2(objects[keys[i]]['pos'][0] - tank_status.x, tank_status.y - objects[keys[i]]['pos'][1]) * 180 / Math.PI;
+        relative_azim = Math.min(Math.max(tank_status.a_x - azim_to_obj, -30), 30);
+        screen_azim = (canvas.width / 2) - ((canvas.width / 60.0) * relative_azim);
+        draw_icon(ctx, 'flag.png', screen_azim - 30, canvas.height/2 - 100, 60, 60);
+    }
+
+}
+
+function load_icons() {
+    icons['flag.png'] = new Image();
+    icons['flag.png'].src = "flag.png";
+}
+
+load_icons();
+
+function draw_icon(ctx, icon, x, y, s_x, s_y) {
+    drawing = new Image();
+    ctx.drawImage(icons['flag.png'], x, y, s_x, s_y);
 }
 
 function draw_attitude() {
@@ -187,16 +213,21 @@ function draw_minimap() {
         ctx.stroke();
     }
 
-    // draw walls
-    ctx.strokeStyle = "#333333";
-    for (i = 0; i < walls.length; i++) {
-        ctx.lineWidth = 0.5;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(walls[i].from.x, walls[i].from.y);
-        ctx.lineTo(walls[i].to.x, walls[i].to.y);
-        ctx.stroke();
+    // draw map_features
+    for (i = 0; i < map_features.length; i++) {
+        if (map_features[i]['type'] == 'line') {
+            ctx.lineWidth = 0.5;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(map_features[i].from.x, map_features[i].from.y);
+            ctx.lineTo(map_features[i].to.x, map_features[i].to.y);
+            ctx.stroke();
+        } else if (map_features[i]['type'] == 'point') {
+            ctx.fillStyle = "yellow";
+            ctx.fillRect(map_features[i]['pos']['x'] - 2, map_features[i]['pos']['y'] - 2, 4, 4);
+        }
     }
+
 
     for (i = 0; i < anchors.length; i++) {
         if (i == 0)
@@ -218,7 +249,7 @@ function update(ts) {
     update_gamepads();
 
     if (time_diff_frame > FPS) {
-        draw_reticle();
+        draw_hud();
         draw_minimap();
         draw_attitude();
         last_frame = ts;
@@ -248,12 +279,17 @@ function connect() {
         msg = JSON.parse(event.data);
         // verify msg
         if (msg['t'] == 'status') {
-            if (Object.keys(msg).some(r=>['a_x', 'a_y', 'a_z', 'l_t', 'r_t', 'volts', 'current', 'x', 'y'].includes(r))) {
+            if (Object.keys(msg).some(r=>['a_x', 'a_y', 'a_z', 'x', 'y', 'z', 'l_t', 'r_t', 'volts', 'current'].includes(r))) {
                 // heading
                 tank_status.a_x = Math.round(msg.a_x);
                 tank_status.a_y = Math.round(msg.a_y);
                 tank_status.a_z = Math.round(msg.a_z);
-                if (tank_status.a_x == 360)
+                tank_status.x =  msg.x;
+                tank_status.y =  msg.y;
+
+                tank_status.a_x += 1;
+
+                if (tank_status.a_x >= 360)
                     tank_status.a_x = 0;
 
                 // throttle
@@ -274,10 +310,14 @@ function connect() {
                 pos_log.unshift({x: msg.x, y: msg.y});
                 pos_log = pos_log.splice(0,50);
             }
-        } else if (msg['t'] == 'arena_config') {
-            if (msg['t'] == 'arena_config') {
-                if (msg['config'] && msg['config']['walls'])
-                    walls = msg['config']['walls'];
+
+            if (msg['objects']) {
+                objects = msg['objects'];
+            }
+        } else if (msg['t'] == 'game_config') {
+            if (msg['t'] == 'game_config') {
+                if (msg['config'] && msg['config']['map_features'])
+                    map_features = msg['config']['map_features'];
             }
         }
     };
