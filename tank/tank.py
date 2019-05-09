@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import json, math, pickle, pigpio, os, signal, struct, time
+import configparser, json, math, pickle, pigpio, os, signal, struct, time
 from hashlib import md5
 from multiprocessing import Process
 from multiprocessing import Queue
@@ -14,18 +14,45 @@ from uuid import getnode as get_mac
 
 running = True
 
+config = configparser.ConfigParser()
+
+def init_config():
+    default_config = {
+       'imu_enabled': True,
+       'current_enabled': True,
+       'min_throttle': 50.0,
+       'right_pwm_f': 19,
+       'right_pwm_r': 26,
+       'left_pwm_f': 27,
+       'left_pwm_r': 17,
+       'server_url': 'ws://10.0.0.2:8000/ws',
+    }
+
+    if not os.path.exists('tank.conf'):
+        config['tank'] = default_config
+        config.write(open('tank.conf', 'w'))
+    else:
+        config.read('tank.conf')
+        for k in default_config.keys():
+            print(k, config['tank'][k])
+            if k not in config['tank'].keys():
+                config['tank'][k] = default_config[k]
+
 # settings
-right_pwm_f = 19
-right_pwm_r = 26
+init_config()
 
-left_pwm_f = 27
-left_pwm_r = 17
+# load settings
+right_pwm_f = int(config['tank']['right_pwm_f'])
+right_pwm_r = int(config['tank']['right_pwm_r'])
 
-min_throttle = 50.0
+left_pwm_f = int(config['tank']['left_pwm_f'])
+left_pwm_r = int(config['tank']['left_pwm_r'])
 
-imu_enabled = True
-current_enabled = True
-server_url = "ws://192.168.97.130:8000/ws"
+min_throttle = float(config['tank']['min_throttle'])
+
+imu_enabled = config['tank']['imu_enabled']
+current_enabled = config['tank']['current_enabled']
+server_url = config['tank']['server_url']
 
 ID = int(md5(str(hex(get_mac())).encode('ascii')).hexdigest()[0:6], 16)
 
