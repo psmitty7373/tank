@@ -2,17 +2,20 @@ body {
 	overflow : hidden;
 	padding : 0;
 	margin : 0;
-	background-color: #ffffff;
+	background-color: #000000;
 }
+
 @font-face { 
     font-family: "ocr-a-std";
     src: url("ocr.woff2") format("woff2");
 }
+
 .gauge {
     border: none;
     padding: 0px;
     width: 100%;
 }
+
 #gauge-bar {
     right: 0px;
     width: 12%;
@@ -20,23 +23,44 @@ body {
     border: none;
     position: absolute;
 }
+
 .gauge-label {
-    font-size: 10px;
+    font-size: 12px;
     font-family: ocr-a-std;
+    background-color: white;
+    padding: 2px;
 }
+
 .gauge-label-value {
-    font-size: 10px;
+    font-size: 12px;
     font-family: ocr-a-std;
+    background-color: white;
+    padding: 2px;
 }
+
+#message-bar {
+    height: 10%;
+    width: 60%;
+    position: absolute;
+    left: 20%;
+    bottom: 30%;
+    font-size: 3vw;
+    color: black;
+    font-family: ocr-a-std;
+    text-shadow: -1px 0 white, 0 1px white, 1px 0 white, 0 -1px white;
+}
+
 #steering-button {
 	background: url("images/steering.png") no-repeat scroll 0 0 transparent;
     background-color: red;
     background-size: contain;
 }
+
 #fullscreen-button {
 	background: url("images/fullscreen.png") no-repeat scroll 0 0 transparent;
     background-size: contain;
 }
+
 #container, #interface {
 	width : 100%;
 	height : 100%;
@@ -46,6 +70,7 @@ body {
 	-webkit-user-select : none;
 	-moz-user-select : none;
 }
+
 #hud, #hud_canvas {
     width: 100%;
     height: 100%;
@@ -55,8 +80,9 @@ body {
     position: absolute;
     left: 0px;
     top: 0px;
-    opacity: 0.5;
+    opacity: 1;
 }
+
 #heading {
     width: 100px;
     height: 50px;
@@ -71,11 +97,13 @@ body {
     font-size: 30px;
     font-family: ocr-a-std;
 }
+
 #interface {
 	z-index: 15;
-	position: absolute !important;
+    position: absolute !important;
     pointer-events: none;
 }
+
 #minimap {
     position: absolute;
     left: 0px;
@@ -83,6 +111,7 @@ body {
     width: 300px;
     height: 300px;
 }
+
 #opencv {
     z-index: 7;
     position: absolute;
@@ -91,12 +120,14 @@ body {
     width: 400px;
     height: 400px;
 }
+
 #remoteVideo {
 	z-index: 1;
 	position: absolute;
     width: 100%;
     height: 100%;
 }
+
 .menu-button {
     height: 6vh;
     width: 6vh;
@@ -104,6 +135,7 @@ body {
     padding: 10px;
     border: none;
 }
+
 #menu-bar {
 	background: green;
 	width: 60%;
@@ -114,6 +146,7 @@ body {
 	z-index: 20;
     border: 1px solid black;
 }
+
 #status-bar {
     z-index: 5;
     position: absolute;
@@ -123,6 +156,7 @@ body {
     width: 100%;
     background-color: gray;
 }
+
 #goFS {
 	position: absolute;
 	left: 20px;

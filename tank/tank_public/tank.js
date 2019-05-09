@@ -163,7 +163,6 @@ function draw_attitude() {
     ctx.arc(0, 0, canvas.width / 2 - 4, 0, 2 * Math.PI);
     ctx.closePath()
     ctx.fill();
-
 }
 
 // MINIMAP
@@ -259,7 +258,6 @@ function update(ts) {
         last_control = ts;
         send_joystick();
     }
-
 }
 
 function connect() {
@@ -274,9 +272,11 @@ function connect() {
             connect();
         }, 500);
     }
+
     ws.onmessage = function(event) {
         document.getElementById("status-bar").innerHTML = event.data;
         msg = JSON.parse(event.data);
+
         // verify msg
         if (msg['t'] == 'status') {
             if (Object.keys(msg).some(r=>['a_x', 'a_y', 'a_z', 'x', 'y', 'z', 'l_t', 'r_t', 'volts', 'current'].includes(r))) {
@@ -296,12 +296,18 @@ function connect() {
                 lt_gauge.set(Math.round(msg.l_t));
                 rt_gauge.set(Math.round(msg.r_t));
 
-                // current
+                // current / voltage
                 document.getElementById("voltage-value").innerHTML = msg.volts + 'v';
                 document.getElementById("current-value").innerHTML = msg.current + 'mah';
 
                 v_gauge.set(msg.volts);
                 c_gauge.set(msg.current);
+
+                if (msg.volts < 6.0) {
+                    document.getElementById("message-bar").innerHTML = "WARNING: Low voltage!";
+                } else {
+                    document.getElementById("message-bar").innerHTML = "";
+                }
 
                 // heading
                 document.getElementById("heading").innerHTML = Math.round(tank_status.a_x).toString(10).padStart(3,'0');
@@ -314,6 +320,7 @@ function connect() {
             if (msg['objects']) {
                 objects = msg['objects'];
             }
+
         } else if (msg['t'] == 'game_config') {
             if (msg['t'] == 'game_config') {
                 if (msg['config'] && msg['config']['map_features'])
@@ -477,8 +484,8 @@ var throttle_gauge_opts = {
 		strokeWidth: 0.035, // The thickness
 		color: '#000000'
 	},
-	limitMax: false,
-	limitMin: false,
+	limitMax: true,
+	limitMin: true,
 	generateGradient: true,
 	staticZones: [
 	   {strokeStyle: "#ff0000", min: -255, max: -200},
@@ -499,8 +506,8 @@ var voltage_gauge_opts = {
 		strokeWidth: 0.035, // The thickness
 		color: '#000000'
 	},
-	limitMax: false,
-	limitMin: false,
+	limitMax: true,
+	limitMin: true,
 	generateGradient: true,
 	staticZones: [
 	   {strokeStyle: "#ff0000", min: 5, max: 6.6},
@@ -519,14 +526,14 @@ var current_gauge_opts = {
 		strokeWidth: 0.035, // The thickness
 		color: '#000000'
 	},
-	limitMax: false,
-	limitMin: false,
+	limitMax: true,
+	limitMin: true,
 	generateGradient: true,
 	staticZones: [
-	   {strokeStyle: "#ff0000", min: 0, max: 100},
-	   {strokeStyle: "#008000", min: 100, max: 1200},
+	   {strokeStyle: "#008000", min: 0, max: 1200},
 	   {strokeStyle: "#ff0000", min: 1200, max: 1600}
 	],
+
 	highDpiSupport: true,     // High resolution support
 };
 
