@@ -158,12 +158,6 @@ class Tank(Process):
         self.pos_x = 0
         self.pos_y = 0
         self.pos_z = 0
-        self.ppos_x = 0
-        self.ppos_y = 0
-        self.ppos_z = 0
-        self.posm_x = []
-        self.posm_y = []
-        self.posm_z = []
         self.pos_quality = 0
         self.azim_x = 0
         self.azim_y = 0
@@ -210,12 +204,8 @@ class Tank(Process):
                 msg = self.to_tank.get()
 
                 if 't' in msg.keys():
-                    # throttle
-                    if msg['t'] == "throttle" and 'throttle' in msg.keys():
-                        self.r_t, self.l_t = msg['throttle']
-
                     # fire
-                    elif msg['t'] == "fire_weapon":
+                    if msg['t'] == "fire_weapon":
                         self.weapon_reload_time = curr_time
                         self.weapon_ready = False
                         self.weapon.send(ord('A'))
@@ -250,105 +240,109 @@ class Tank(Process):
                     elif msg['t'] == 'connect':
                         self.to_tornado.put({ 't': 'game_config', 'config': self.game_config })
 
-                # right motor
-                if self.r_t > 0: # forward
-                    # changing directions
-                    if self.right_dir == 'b':
-                        # start braking
-                        if not self.right_braking:
-                            self.right_braking = True
-                            self.right_brake_time = time.time() * 1000
+                    # throttle
+                    elif msg['t'] == "throttle" and 'throttle' in msg.keys():
+                        self.r_t, self.l_t = msg['throttle']
 
-                        # done braking
-                        if time.time() * 1000 - self.right_brake_time > self.brake_time:
-                            self.right_braking = False
-                            self.right_dir = 'f'
+                        # right motor
+                        if self.r_t > 0: # forward
+                            # changing directions
+                            if self.right_dir == 'b':
+                                # start braking
+                                if not self.right_braking:
+                                    self.right_braking = True
+                                    self.right_brake_time = time.time() * 1000
 
-                    # same dir, cancel braking
-                    elif self.right_braking:
-                        self.right_braking = False
+                                # done braking
+                                if time.time() * 1000 - self.right_brake_time > self.brake_time:
+                                    self.right_braking = False
+                                    self.right_dir = 'f'
 
-                elif self.r_t < 0:
-                    if self.right_dir == 'f':
-                        # start braking
-                        if not self.right_braking:
-                            self.right_braking = True
-                            self.right_brake_time = time.time() * 1000
+                            # same dir, cancel braking
+                            elif self.right_braking:
+                                self.right_braking = False
 
-                        # done braking
-                        if time.time() * 1000 - self.right_brake_time > self.brake_time:
-                            self.right_braking = False
-                            self.right_dir = 'b'
+                        elif self.r_t < 0:
+                            if self.right_dir == 'f':
+                                # start braking
+                                if not self.right_braking:
+                                    self.right_braking = True
+                                    self.right_brake_time = time.time() * 1000
 
-                    # same dir, cancel braking
-                    elif self.right_braking:
-                        self.right_braking = False
+                                # done braking
+                                if time.time() * 1000 - self.right_brake_time > self.brake_time:
+                                    self.right_braking = False
+                                    self.right_dir = 'b'
 
-                # left motor
-                if self.l_t > 0: # forward
-                    # changing directions
-                    if self.left_dir == 'b':
-                        # start braking
-                        if not self.left_braking:
-                            self.left_braking = True
-                            self.left_brake_time = time.time() * 1000
+                            # same dir, cancel braking
+                            elif self.right_braking:
+                                self.right_braking = False
 
-                        # done braking
-                        if time.time() * 1000 - self.left_brake_time > self.brake_time:
-                            self.left_braking = False
-                            self.left_dir = 'f'
+                        # left motor
+                        if self.l_t > 0: # forward
+                            # changing directions
+                            if self.left_dir == 'b':
+                                # start braking
+                                if not self.left_braking:
+                                    self.left_braking = True
+                                    self.left_brake_time = time.time() * 1000
 
-                    # same dir, cancel braking
-                    elif self.left_braking:
-                        self.left_braking = False
+                                # done braking
+                                if time.time() * 1000 - self.left_brake_time > self.brake_time:
+                                    self.left_braking = False
+                                    self.left_dir = 'f'
 
-                elif self.l_t < 0:
-                    if self.left_dir == 'f':
-                        # start braking
-                        if not self.left_braking:
-                            self.left_braking = True
-                            self.left_brake_time = time.time() * 1000
+                            # same dir, cancel braking
+                            elif self.left_braking:
+                                self.left_braking = False
 
-                        # done braking
-                        if time.time() * 1000 - self.left_brake_time > self.brake_time:
-                            self.left_braking = False
-                            self.left_dir = 'b'
+                        elif self.l_t < 0:
+                            if self.left_dir == 'f':
+                                # start braking
+                                if not self.left_braking:
+                                    self.left_braking = True
+                                    self.left_brake_time = time.time() * 1000
 
-                    # same dir, cancel braking
-                    elif self.left_braking:
-                        self.left_braking = False
+                                # done braking
+                                if time.time() * 1000 - self.left_brake_time > self.brake_time:
+                                    self.left_braking = False
+                                    self.left_dir = 'b'
 
-                #left motor speed
-                if self.l_t == 0 or self.left_braking:
-                    self.pi.set_PWM_dutycycle(left_pwm_f, 0)
-                    self.pi.set_PWM_dutycycle(left_pwm_r, 0)
-                else:
-                    if self.left_dir == 'f':
-                        self.pi.set_PWM_dutycycle(left_pwm_r, 0)
-                        self.pi.set_PWM_dutycycle(left_pwm_f, abs(self.l_t))
-                    else:
-                        self.pi.set_PWM_dutycycle(left_pwm_f, 0)
-                        self.pi.set_PWM_dutycycle(left_pwm_r, abs(self.l_t))
+                            # same dir, cancel braking
+                            elif self.left_braking:
+                                self.left_braking = False
 
-                # right motor speed
-                if self.r_t == 0 or self.right_braking:
-                    self.pi.set_PWM_dutycycle(right_pwm_f, 0)
-                    self.pi.set_PWM_dutycycle(right_pwm_r, 0)
-                else:
-                    if self.right_dir == 'f':
-                        self.pi.set_PWM_dutycycle(right_pwm_r, 0)
-                        self.pi.set_PWM_dutycycle(right_pwm_f, abs(self.r_t))
-                    else:
-                        self.pi.set_PWM_dutycycle(right_pwm_f, 0)
-                        self.pi.set_PWM_dutycycle(right_pwm_r, abs(self.r_t))
+                        #left motor speed
+                        if self.l_t == 0 or self.left_braking:
+                            self.pi.set_PWM_dutycycle(left_pwm_f, 0)
+                            self.pi.set_PWM_dutycycle(left_pwm_r, 0)
+                        else:
+                            if self.left_dir == 'f':
+                                self.pi.set_PWM_dutycycle(left_pwm_r, 0)
+                                self.pi.set_PWM_dutycycle(left_pwm_f, abs(self.l_t))
+                            else:
+                                self.pi.set_PWM_dutycycle(left_pwm_f, 0)
+                                self.pi.set_PWM_dutycycle(left_pwm_r, abs(self.l_t))
+
+                        # right motor speed
+                        if self.r_t == 0 or self.right_braking:
+                            self.pi.set_PWM_dutycycle(right_pwm_f, 0)
+                            self.pi.set_PWM_dutycycle(right_pwm_r, 0)
+                        else:
+                            if self.right_dir == 'f':
+                                self.pi.set_PWM_dutycycle(right_pwm_r, 0)
+                                self.pi.set_PWM_dutycycle(right_pwm_f, abs(self.r_t))
+                            else:
+                                self.pi.set_PWM_dutycycle(right_pwm_f, 0)
+                                self.pi.set_PWM_dutycycle(right_pwm_r, abs(self.r_t))
 
             # send current status
-            if not self.to_tornado.full() and time.time() * 1000 - self.heartbeat_time > 50:
+            if not self.to_tornado.full() and time.time() * 1000 - self.heartbeat_time > 100:
                 self.heartbeat_time = time.time() * 1000
                 self.to_tornado.put({ 't': 'status', 'current': self.current, 'volts': self.volts, 'l_t': self.l_t, 'r_t': self.r_t, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality, 'objects': self.objects })
 
             # prevent busy waiting
-            time.sleep(0.01)
+            time.sleep(0.05)
 
         print('Tank done.')
         self.pi.stop()

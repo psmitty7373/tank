@@ -17,15 +17,17 @@
 //  - need to add new inteface to configure for rws config parameters
 //
 ////////////////////////////////////////////////////////////////////////////////
-
+//
+//
 function trace(arg) {
-    var now = (window.performance.now() / 1000).toFixed(3);
-    console.log(now + ': ', arg);
+      var now = (window.performance.now() / 1000).toFixed(3);
+      console.log(now + ': ', arg);
 }
+
 
 function PeerConnectionClient(remoteVideo, doSendPeerMessage) {
     // configuration for peerconnection
-    this.pcConfig_ = {"iceServers": []};//{"urls": "stun:stun.l.google.com:19302"}]};
+    this.pcConfig_ = {"iceServers": []};
     this.pcOptions_ = { optional: [ {DtlsSrtpKeyAgreement: true} ] };
 
     this.messageCounter_ = 0;
