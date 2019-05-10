@@ -22,14 +22,21 @@
                     <canvas id="voltage" class="gauge"></canvas>
                     <label id="voltage-value" class="gauge-label-value">0.0v</label>
                 </div>
-		<div id="message-bar" class="message-bar"></div>
-                <div id="menu-bar">
-                    <button id="steering-button" class="menu-button"></button>
-                    <button id="fullscreen-button" class="menu-button"></button>
-                </div>
+                <div id="message-bar" class="message-bar"></div>
+            </div>
+            <div id="menu-bar">
+                <button id="steering-button" class="menu-button"></button>
+                <button id="fullscreen-button" class="menu-button"></button>
+                <button id="config-button" class="menu-button"></button>
             </div>
             <div id="interface"></div>
             <div id="status-bar" style="display:none;"></div>
+            <dialog id="config-dialog">
+                <h3>Configuration</h3>
+                <div id="config"></div>
+                <button class="config-button" id="save-config-button">Save
+                <button class="config-button" id="cancel-config-button">Cancel
+            </dialog>
         </div>
         <script src="virtualjoystick.js"></script>
         <script src="sdputils.js"></script>

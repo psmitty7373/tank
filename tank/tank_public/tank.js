@@ -1,10 +1,3 @@
-function isPrivateAddress(ipaddress) {
-    let parts = ipaddress.split('.');
-    return parts[0] === '10' ||
-            (parts[0] === '172' && (parseInt(parts[1], 10) >= 16 && parseInt(parts[1], 10) <= 31)) ||
-            (parts[0] === '192' && parts[1] === '168');
-};
-
 // GLOBALS
 let anchors = [
         {id: 'a', x: 0, y: 0, z: 0 },
@@ -28,6 +21,7 @@ let reticle_color = "green";
 let weapon_ready = true;
 let icons = {};
 let objects = {};
+let tank_config = {};
 
 // GAUGES
 let lt_gauge = null;
@@ -94,21 +88,22 @@ function draw_hud() {
         screen_azim = (canvas.width / 2) - ((canvas.width / 60.0) * relative_azim);
         draw_icon(ctx, 'flag.png', screen_azim - 30, canvas.height/2 - 100, 60, 60);
     }
-
 }
 
+// icon loader
 function load_icons() {
     icons['flag.png'] = new Image();
     icons['flag.png'].src = "flag.png";
 }
 
-load_icons();
 
+// draw hud icon
 function draw_icon(ctx, icon, x, y, s_x, s_y) {
     drawing = new Image();
     ctx.drawImage(icons['flag.png'], x, y, s_x, s_y);
 }
 
+// draw hud bubble
 function draw_attitude() {
     let canvas = document.getElementById("attitude");
     let ctx = canvas.getContext("2d");
@@ -240,6 +235,7 @@ function draw_minimap() {
 
 }
 
+// update drawing frame / hud
 function update(ts) {
     requestAnimationFrame(update);
 
@@ -260,12 +256,9 @@ function update(ts) {
     }
 }
 
+// connect to tank
 function connect() {
-    if(isPrivateAddress(location.host))
-            websocket_url = "ws://" + location.hostname + ':8000/tank_ws';
-    else
-            websocket_url = "wss://" + location.hostname + '/tank_ws';
-
+    websocket_url = "ws://" + location.hostname + ':8000/tank_ws';
     ws = new WebSocket(websocket_url);
     ws.onclose = function() {
         setTimeout(function() {
@@ -326,10 +319,90 @@ function connect() {
                 if (msg['config'] && msg['config']['map_features'])
                     map_features = msg['config']['map_features'];
             }
+        } else if (msg['t'] == 'tank_config') {
+            tank_config = msg['config'];
         }
     };
 }
 
+// WEAPON
+function fire_weapon_wrapper() {
+    if (weapon_ready) {
+        weapon_ready = false;
+        fire_weapon(10);
+    }
+}
+
+function fire_weapon(times) {
+    if (ws.readyState == 1) {
+        msg = { t: 'f' };
+        ws.send(JSON.stringify(msg));
+    }
+    times--;
+    if (times > 0)
+        setTimeout(function() { fire_weapon(times); }, 50);
+    else
+        weapon_ready = true;
+}
+
+// FULLSCREEN
+function toggle_full_screen() {
+    var doc = window.document;
+    var docEl = doc.documentElement;
+
+    var requestFullScreen = docEl.requestFullscreen || docEl.mozRequestFullScreen || docEl.webkitRequestFullScreen || docEl.msRequestFullscreen;
+    var cancelFullScreen = doc.exitFullscreen || doc.mozCancelFullScreen || doc.webkitExitFullscreen || doc.msExitFullscreen;
+
+    if (!doc.fullscreenElement && !doc.mozFullScreenElement && !doc.webkitFullscreenElement && !doc.msFullscreenElement) {
+        requestFullScreen.call(docEl);
+    } else {
+        cancelFullScreen.call(doc);
+    }
+}
+
+document.getElementById("config-button").addEventListener("click", function() {
+    var config_dialog = document.getElementById('config-dialog');
+    var config_html = document.getElementById('config');
+    html = '<div class="config-options">';
+    keys = Object.keys(tank_config);
+    for (i = 0; i < keys.length; i++) {
+        html += '<div class="config-label">' + keys[i] + '</div><input type="text" class="config-input" value="' + tank_config[keys[i]] + '">';
+    }
+    html +=  '</div';
+    config_html.innerHTML = html;
+    config_dialog.show();
+}, false);
+
+document.getElementById("save-config-button").addEventListener("click", function() {
+    var options = document.getElementById('config').childNodes[0].childNodes;
+    var new_config = {};
+    for (var i = 0; i < options.length; i+=2) {
+        new_config[options[i].textContent] =  options[i+1].value;
+    }
+    var msg = { t: 'update_tank_config', config: new_config };
+    ws.send(JSON.stringify(msg));
+    document.getElementById('config-dialog').close();
+}, false);
+
+document.getElementById("cancel-config-button").addEventListener("click", function() {
+    document.getElementById('config-dialog').close();
+}, false);
+
+document.getElementById("fullscreen-button").addEventListener("click", function() {
+    toggle_full_screen();
+}, false);
+
+document.getElementById("steering-button").addEventListener("click", function() {
+    if (document.getElementById("interface").style.pointerEvents == "all") {
+        document.getElementById("interface").style.pointerEvents = "none";
+        document.getElementById("steering-button").style.backgroundColor = "red";
+    } else {
+        document.getElementById("interface").style.pointerEvents = "all";
+        document.getElementById("steering-button").style.backgroundColor = "green";
+    }
+}, false);
+
+// GAMEPADS // JOYSTICK
 let virt_joystick = new VirtualJoystick({
     container : document.getElementById('interface'),
     mouseSupport : true,
@@ -359,54 +432,7 @@ function send_joystick() {
     }
 }
 
-function fire_weapon_wrapper() {
-    if (weapon_ready) {
-        weapon_ready = false;
-        fire_weapon(10);
-    }
-}
 
-function fire_weapon(times) {
-    if (ws.readyState == 1) {
-        msg = { t: 'f' };
-        ws.send(JSON.stringify(msg));
-    }
-    times--;
-    if (times > 0)
-        setTimeout(function() { fire_weapon(times); }, 50);
-    else
-        weapon_ready = true;
-}
-
-function toggleFullScreen() {
-    var doc = window.document;
-    var docEl = doc.documentElement;
-
-    var requestFullScreen = docEl.requestFullscreen || docEl.mozRequestFullScreen || docEl.webkitRequestFullScreen || docEl.msRequestFullscreen;
-    var cancelFullScreen = doc.exitFullscreen || doc.mozCancelFullScreen || doc.webkitExitFullscreen || doc.msExitFullscreen;
-
-    if (!doc.fullscreenElement && !doc.mozFullScreenElement && !doc.webkitFullscreenElement && !doc.msFullscreenElement) {
-        requestFullScreen.call(docEl);
-    } else {
-        cancelFullScreen.call(doc);
-    }
-}
-
-document.getElementById("fullscreen-button").addEventListener("click", function() {
-    toggleFullScreen();
-}, false);
-
-document.getElementById("steering-button").addEventListener("click", function() {
-    if (document.getElementById("interface").style.pointerEvents == "all") {
-        document.getElementById("interface").style.pointerEvents = "none";
-        document.getElementById("steering-button").style.backgroundColor = "red";
-    } else {
-        document.getElementById("interface").style.pointerEvents = "all";
-        document.getElementById("steering-button").style.backgroundColor = "green";
-    }
-}, false);
-
-// GAMEPADS
 let haveEvents = 'ongamepadconnected' in window;
 let controllers = {};
 
@@ -465,14 +491,12 @@ function scan_gamepads() {
     }
 }
 
-
 window.addEventListener("gamepadconnected", connect_gamepad);
 window.addEventListener("gamepaddisconnected", disconnect_gamepad);
 
 if (!haveEvents) {
   setInterval(scan_gamepads, 500);
 }
-
 
 // GAUGES:
 var throttle_gauge_opts = {
@@ -542,6 +566,7 @@ var websocketSignalingChannel = new WebSocketSignalingChannel(document.getElemen
 
 // DOCUMENT READY
 (function() {
+    load_icons();
     connect();
     websocketSignalingChannel.doSignalingConnect()
 

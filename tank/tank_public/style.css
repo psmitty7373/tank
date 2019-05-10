@@ -38,6 +38,44 @@ body {
     padding: 2px;
 }
 
+#config-dialog {
+    z-index: 30;
+    width: 50%;
+    background-color: gray;
+    font-family: ocr-a-std;
+    text-align: center;
+}
+
+#save-config-button {
+    margin-right: 10px;
+}
+
+.config-options {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 2fr;
+    grid-row-gap: 5px;
+    grid-column-gap: 5px;
+}
+
+.config-input {
+    width: 100%;
+    font-family: ocr-a-std;
+    font-size: 10px;
+    margin-bottom: 10px;
+}
+
+.config-label {
+    width: 100%;
+    text-align: right;
+}
+
+.config-button {
+    height: 30px;
+    font-family: ocr-a-std;
+    font-size: 14px;
+}
+
 #message-bar {
     height: 10%;
     width: 60%;
@@ -58,6 +96,11 @@ body {
 
 #fullscreen-button {
 	background: url("images/fullscreen.png") no-repeat scroll 0 0 transparent;
+    background-size: contain;
+}
+
+#config-button {
+	background: url("images/config.png") no-repeat scroll 0 0 transparent;
     background-size: contain;
 }
 

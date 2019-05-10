@@ -12,48 +12,12 @@ from tornado import gen
 from threading import Thread
 from uuid import getnode as get_mac
 
+import cProfile as profile
+
 running = True
 
-config = configparser.ConfigParser()
-
-def init_config():
-    default_config = {
-       'imu_enabled': True,
-       'current_enabled': True,
-       'min_throttle': 50.0,
-       'right_pwm_f': 19,
-       'right_pwm_r': 26,
-       'left_pwm_f': 27,
-       'left_pwm_r': 17,
-       'server_url': 'ws://10.0.0.2:8000/ws',
-    }
-
-    if not os.path.exists('tank.conf'):
-        config['tank'] = default_config
-        config.write(open('tank.conf', 'w'))
-    else:
-        config.read('tank.conf')
-        for k in default_config.keys():
-            print(k, config['tank'][k])
-            if k not in config['tank'].keys():
-                config['tank'][k] = default_config[k]
-
-# settings
-init_config()
 
 # load settings
-right_pwm_f = int(config['tank']['right_pwm_f'])
-right_pwm_r = int(config['tank']['right_pwm_r'])
-
-left_pwm_f = int(config['tank']['left_pwm_f'])
-left_pwm_r = int(config['tank']['left_pwm_r'])
-
-min_throttle = float(config['tank']['min_throttle'])
-
-imu_enabled = config['tank']['imu_enabled']
-current_enabled = config['tank']['current_enabled']
-server_url = config['tank']['server_url']
-
 ID = int(md5(str(hex(get_mac())).encode('ascii')).hexdigest()[0:6], 16)
 
 def translate(value, leftMin, leftMax, rightMin, rightMax):
@@ -62,7 +26,7 @@ def translate(value, leftMin, leftMax, rightMin, rightMax):
     valueScaled = float(value - leftMin) / float(leftSpan)
     return rightMin + (valueScaled * rightSpan)
 
-def steering(x, y):
+def steering(x, y, min_throttle=50.0):
     if y >= 0: # forward
         if x >= 0: # right
             premix_l = 1.0
@@ -111,10 +75,63 @@ class Tank(Process):
         self.to_tank = to_tank
         self.to_main = to_main
         self.to_tornado = to_tornado
+        self.tank_config = configparser.ConfigParser()
+        self.init_config()
        
     def shutdown(self, signal, frame):
         print('Stopping tank.')
         self.running = False
+
+    def init_config(self):
+        default_config = {
+            'imu_enabled': { 'default': True, 'type': bool, 'check': lambda x: x == 'True' or x == 'False' },
+            'current_enabled': { 'default': True, 'type': bool, 'check': lambda x: x == 'True' or x == 'False' },
+            'min_throttle': { 'default': 50.0, 'type': float, 'check': lambda x: float(x) >= 0 and float(x) <= 75 },
+            'right_pwm_f': { 'default': 27, 'type': int, 'check': lambda x: int(x) >= 1 and float(x) <= 29 },
+            'right_pwm_r': { 'default': 22, 'type': int, 'check': lambda x: int(x) >= 1 and float(x) <= 29 },
+            'left_pwm_f': { 'default': 18, 'type': int, 'check': lambda x: int(x) >= 1 and float(x) <= 29 },
+            'left_pwm_r': { 'default': 17, 'type': int, 'check': lambda x: int(x) >= 1 and float(x) <= 29 }
+        }
+
+        if not os.path.exists('tank.conf'):
+            for k in default_config.keys():
+                self.tank_config['tank'] = default_config[k]['default']
+            self.tank_config.write(open('tank.conf', 'w'))
+
+        else:
+            self.tank_config.read('tank.conf')
+            # verify existing config options
+            for k in self.tank_config['tank'].keys():
+                print(k, self.tank_config['tank'][k])
+                if k in default_config.keys():
+                    try:
+                        if default_config[k]['check'](self.tank_config['tank'][k]):
+                            continue
+                        else:
+                            raise
+                    except:
+                        print('Invalid config option:', k, ' Using default value.')
+                        self.tank_config.remove_option('tank', k)
+
+            # add missing defaults
+            for k in default_config.keys():
+                if k not in self.tank_config['tank'].keys():
+                    self.tank_config['tank'][k] = str(default_config[k]['default'])
+
+        self.right_pwm_f = int(self.tank_config['tank']['right_pwm_f'])
+        self.right_pwm_r = int(self.tank_config['tank']['right_pwm_r'])
+
+        self.left_pwm_f = int(self.tank_config['tank']['left_pwm_f'])
+        self.left_pwm_r = int(self.tank_config['tank']['left_pwm_r'])
+
+        self.min_throttle = float(self.tank_config['tank']['min_throttle'])
+
+        self.imu_enabled = self.tank_config['tank']['imu_enabled'] == 'True'
+        self.current_enabled = self.tank_config['tank']['current_enabled'] == 'True'
+
+
+    #def run(self):
+    #    profile.runctx('self.run2()', globals(), locals())
 
     def run(self):
         print('Starting tank.')
@@ -131,7 +148,7 @@ class Tank(Process):
         self.weapon_ready = True
 
         #init imu
-        if imu_enabled:
+        if self.imu_enabled:
             self.bno = self.BNO055.BNO055()
             if self.bno.begin() is not True:
                 print("Error initializing device")
@@ -146,39 +163,45 @@ class Tank(Process):
             self.bno = None
 
         #init ina219
-        if current_enabled:
+        if self.current_enabled:
             self.ina = self.INA219.INA219(bus=3, address=0x44)
 
         #init transponder
         self.trans = Transponder(self.pi, 12)
         self.trans.beacon()
 
+        curr_time = time.time() * 1000
+
         #right
-        self.pi.set_mode(right_pwm_f, pigpio.OUTPUT)
-        self.pi.set_mode(right_pwm_r, pigpio.OUTPUT)
-        self.right_dir = 'f'
-        self.right_braking = False
-        self.right_brake_time = time.time() * 1000
-        self.r_t = 0
+        self.pi.set_mode(self.right_pwm_f, pigpio.OUTPUT)
+        self.pi.set_mode(self.right_pwm_r, pigpio.OUTPUT)
+        right_dir = 'f'
+        right_braking = False
+        right_brake_time = curr_time
+        r_t = 0
+        last_r_t_f = 0
+        last_r_t_r = 0
 
         #left
-        self.pi.set_mode(left_pwm_f, pigpio.OUTPUT)
-        self.pi.set_mode(left_pwm_r, pigpio.OUTPUT)
-        self.left_dir = 'f'
-        self.left_braking = False
-        self.left_brake_time = time.time() * 1000
-        self.l_t = 0
+        self.pi.set_mode(self.left_pwm_f, pigpio.OUTPUT)
+        self.pi.set_mode(self.left_pwm_r, pigpio.OUTPUT)
+        left_dir = 'f'
+        left_braking = False
+        left_brake_time = curr_time
+        l_t = 0
+        last_l_t_f = 0
+        last_l_t_r = 0
 
         # ina219
         self.current = 0
         self.volts = 0
 
         # timers
-        self.brake_time = 100
-        self.temp_time = time.time() * 1000
-        self.failsafe_time = time.time() * 1000
-        self.heartbeat_time = time.time() * 1000
-        self.weapon_reload_time = 0
+        brake_time = 100
+        t30s_time = curr_time
+        failsafe_time = curr_time
+        t100ms_time = curr_time
+        weapon_reload_time = 0
 
         # position
         self.pos_ready = False
@@ -197,38 +220,43 @@ class Tank(Process):
             curr_time = time.time() * 1000
 
             # if no update in a second, stop motors
-            if curr_time - self.failsafe_time > 1000:
-                self.pi.set_PWM_dutycycle(left_pwm_f, 0)
-                self.pi.set_PWM_dutycycle(left_pwm_r, 0)
-                self.pi.set_PWM_dutycycle(right_pwm_f, 0)
-                self.pi.set_PWM_dutycycle(right_pwm_r, 0)
+            if curr_time - failsafe_time > 1000:
+                last_l_t_f = last_l_t_r = 0
+                last_r_t_f = last_r_t_r = 0
+                self.pi.set_PWM_dutycycle(self.left_pwm_f, 0)
+                self.pi.set_PWM_dutycycle(self.left_pwm_r, 0)
+                self.pi.set_PWM_dutycycle(self.right_pwm_f, 0)
+                self.pi.set_PWM_dutycycle(self.right_pwm_r, 0)
 
             # update reload timer
             if not self.weapon_ready:
                 if curr_time - self.weapon_reload_time > 5000:
                     self.weapon_ready = True
 
-            # IMU --------------------------------------------------------------------
-            # poll imu
-            if imu_enabled and self.bno:
-                self.azim_x, self.azim_y, self.azim_z = self.bno.getVector(self.BNO055.BNO055.VECTOR_EULER)
-                calib = self.bno.getCalibrationStatus()
-                if curr_time - self.temp_time > 30000:
-                    if calib[0] == 3 and calib[1] == 3 and calib[3] == 3:
-                        cd = self.bno.getCalibrationData()
-                        with open('imu.conf', 'wb') as f:
-                            pickle.dump(cd, f)
-                        self.temp_time = curr_time
+            # poll sensors
+            if curr_time - t100ms_time > 100:
+                # IMU --------------------------------------------------------------------
+                # poll imu
+                if self.imu_enabled and self.bno:
+                    self.azim_x, self.azim_y, self.azim_z = self.bno.getVector(self.BNO055.BNO055.VECTOR_EULER)
+                    calib = self.bno.getCalibrationStatus()
+                    if curr_time - t30s_time > 30000:
+                        if calib[0] == 3 and calib[1] == 3 and calib[3] == 3:
+                            cd = self.bno.getCalibrationData()
+                            with open('imu.conf', 'wb') as f:
+                                pickle.dump(cd, f)
+                            t30s_time = curr_time
 
-            # INA219 ----------------------------------------------------------------
-            if current_enabled and self.ina:
-                self.volts = self.ina.get_bus_voltage()
-                self.current = self.ina.get_current()
+                # INA219 ----------------------------------------------------------------
+                if self.current_enabled and self.ina:
+                    self.volts = self.ina.get_bus_voltage()
+                    self.current = self.ina.get_current()
 
             # handle all messages in the queue
             while not self.to_tank.empty():
-                self.failsafe_time = curr_time
+                failsafe_time = curr_time
                 msg = self.to_tank.get()
+
 
                 if 't' in msg.keys():
                     # fire
@@ -258,6 +286,20 @@ class Tank(Process):
                     elif msg['t'] == 'poll':
                         self.trans.poll()
 
+                    # update tank config
+                    elif msg['t'] == 'update_tank_config' and 'config' in msg.keys():
+                        for k in msg['config'].keys():
+                            self.tank_config['tank'][k] = msg['config'][k]
+
+                        # save the config
+                        self.tank_config.write(open('tank.conf', 'w'))
+
+                        # activate the config
+                        self.init_config()
+
+                        # send the new config
+                        self.to_tornado.put({ 't': 'tank_config', 'config': dict(self.tank_config['tank']) })
+
                     # if we get an game_config, blast it out
                     elif msg['t'] == 'game_config' and 'config' in msg.keys():
                         self.game_config = msg['config']
@@ -266,107 +308,125 @@ class Tank(Process):
                     # when a client connects send the current game_config
                     elif msg['t'] == 'connect':
                         self.to_tornado.put({ 't': 'game_config', 'config': self.game_config })
+                        self.to_tornado.put({ 't': 'tank_config', 'config': dict(self.tank_config['tank']) })
 
                     # throttle
                     elif msg['t'] == "throttle" and 'throttle' in msg.keys():
-                        self.r_t, self.l_t = msg['throttle']
+                        r_t, l_t = msg['throttle']
 
                         # right motor
-                        if self.r_t > 0: # forward
+                        if r_t > 0: # forward
                             # changing directions
-                            if self.right_dir == 'b':
+                            if right_dir == 'b':
                                 # start braking
-                                if not self.right_braking:
-                                    self.right_braking = True
-                                    self.right_brake_time = time.time() * 1000
+                                if not right_braking:
+                                    right_braking = True
+                                    right_brake_time = curr_time
 
                                 # done braking
-                                if time.time() * 1000 - self.right_brake_time > self.brake_time:
-                                    self.right_braking = False
-                                    self.right_dir = 'f'
+                                if curr_time - right_brake_time > brake_time:
+                                    right_braking = False
+                                    right_dir = 'f'
 
                             # same dir, cancel braking
-                            elif self.right_braking:
-                                self.right_braking = False
+                            elif right_braking:
+                                right_braking = False
 
-                        elif self.r_t < 0:
-                            if self.right_dir == 'f':
+                        elif r_t < 0:
+                            if right_dir == 'f':
                                 # start braking
-                                if not self.right_braking:
-                                    self.right_braking = True
-                                    self.right_brake_time = time.time() * 1000
+                                if not right_braking:
+                                    right_braking = True
+                                    right_brake_time = curr_time
 
                                 # done braking
-                                if time.time() * 1000 - self.right_brake_time > self.brake_time:
-                                    self.right_braking = False
-                                    self.right_dir = 'b'
+                                if curr_time - right_brake_time > brake_time:
+                                    right_braking = False
+                                    right_dir = 'b'
 
                             # same dir, cancel braking
-                            elif self.right_braking:
-                                self.right_braking = False
+                            elif right_braking:
+                                right_braking = False
 
                         # left motor
-                        if self.l_t > 0: # forward
+                        if l_t > 0: # forward
                             # changing directions
-                            if self.left_dir == 'b':
+                            if left_dir == 'b':
                                 # start braking
-                                if not self.left_braking:
-                                    self.left_braking = True
-                                    self.left_brake_time = time.time() * 1000
+                                if not left_braking:
+                                    left_braking = True
+                                    left_brake_time = curr_time
 
                                 # done braking
-                                if time.time() * 1000 - self.left_brake_time > self.brake_time:
-                                    self.left_braking = False
-                                    self.left_dir = 'f'
+                                if curr_time - left_brake_time > brake_time:
+                                    left_braking = False
+                                    left_dir = 'f'
 
                             # same dir, cancel braking
-                            elif self.left_braking:
-                                self.left_braking = False
+                            elif left_braking:
+                                left_braking = False
 
-                        elif self.l_t < 0:
-                            if self.left_dir == 'f':
+                        elif l_t < 0:
+                            if left_dir == 'f':
                                 # start braking
-                                if not self.left_braking:
-                                    self.left_braking = True
-                                    self.left_brake_time = time.time() * 1000
+                                if not left_braking:
+                                    left_braking = True
+                                    left_brake_time = curr_time
 
                                 # done braking
-                                if time.time() * 1000 - self.left_brake_time > self.brake_time:
-                                    self.left_braking = False
-                                    self.left_dir = 'b'
+                                if curr_time - left_brake_time > brake_time:
+                                    left_braking = False
+                                    left_dir = 'b'
 
                             # same dir, cancel braking
-                            elif self.left_braking:
-                                self.left_braking = False
+                            elif left_braking:
+                                left_braking = False
 
                         #left motor speed
-                        if self.l_t == 0 or self.left_braking:
-                            self.pi.set_PWM_dutycycle(left_pwm_f, 0)
-                            self.pi.set_PWM_dutycycle(left_pwm_r, 0)
+                        if l_t == 0 or left_braking:
+                            if last_l_t_f != 0:
+                                self.pi.set_PWM_dutycycle(self.left_pwm_f, 0)
+                                last_l_t_f = 0
+
+                            if last_l_t_r != 0:
+                                self.pi.set_PWM_dutycycle(self.left_pwm_r, 0)
+                                last_l_t_r = 0
+
                         else:
-                            if self.left_dir == 'f':
-                                self.pi.set_PWM_dutycycle(left_pwm_r, 0)
-                                self.pi.set_PWM_dutycycle(left_pwm_f, abs(self.l_t))
+                            if left_dir == 'f':
+                                if last_l_t_f != abs(l_t):
+                                    self.pi.set_PWM_dutycycle(self.left_pwm_f, abs(l_t))
+                                    last_l_t_f = abs(l_t)
+
+                                if last_l_t_r != 0:
+                                    self.pi.set_PWM_dutycycle(self.left_pwm_r, 0)
+                                    last_l_t_r = 0
+
                             else:
-                                self.pi.set_PWM_dutycycle(left_pwm_f, 0)
-                                self.pi.set_PWM_dutycycle(left_pwm_r, abs(self.l_t))
+                                if last_l_t_f != 0:
+                                    self.pi.set_PWM_dutycycle(self.left_pwm_f, 0)
+                                    last_l_t_f = 0
+
+                                if last_l_t_r != abs(l_t):
+                                    self.pi.set_PWM_dutycycle(self.left_pwm_r, abs(l_t))
+                                    last_l_t_r = abs(l_t)
 
                         # right motor speed
-                        if self.r_t == 0 or self.right_braking:
-                            self.pi.set_PWM_dutycycle(right_pwm_f, 0)
-                            self.pi.set_PWM_dutycycle(right_pwm_r, 0)
+                        if r_t == 0 or right_braking:
+                            self.pi.set_PWM_dutycycle(self.right_pwm_f, 0)
+                            self.pi.set_PWM_dutycycle(self.right_pwm_r, 0)
                         else:
-                            if self.right_dir == 'f':
-                                self.pi.set_PWM_dutycycle(right_pwm_r, 0)
-                                self.pi.set_PWM_dutycycle(right_pwm_f, abs(self.r_t))
+                            if right_dir == 'f':
+                                self.pi.set_PWM_dutycycle(self.right_pwm_r, 0)
+                                self.pi.set_PWM_dutycycle(self.right_pwm_f, abs(r_t))
                             else:
-                                self.pi.set_PWM_dutycycle(right_pwm_f, 0)
-                                self.pi.set_PWM_dutycycle(right_pwm_r, abs(self.r_t))
+                                self.pi.set_PWM_dutycycle(self.right_pwm_f, 0)
+                                self.pi.set_PWM_dutycycle(self.right_pwm_r, abs(r_t))
 
             # send current status
-            if not self.to_tornado.full() and time.time() * 1000 - self.heartbeat_time > 100:
-                self.heartbeat_time = time.time() * 1000
-                self.to_tornado.put({ 't': 'status', 'current': self.current, 'volts': self.volts, 'l_t': self.l_t, 'r_t': self.r_t, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality, 'objects': self.objects })
+            if not self.to_tornado.full() and curr_time - t100ms_time > 100:
+                t100ms_time = curr_time
+                self.to_tornado.put({ 't': 'status', 'current': self.current, 'volts': self.volts, 'l_t': l_t, 'r_t': r_t, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality, 'objects': self.objects })
 
             # prevent busy waiting
             time.sleep(0.05)
@@ -399,6 +459,8 @@ class Transponder:
 class WebsocketClient(Thread):
     def __init__(self, to_client, to_tank, to_main):
         super(WebsocketClient, self).__init__()
+        self.server_config = configparser.ConfigParser()
+        self.init_config()
         self.ioloop = tornado.ioloop.IOLoop.instance()
         self.ws = None
         self.to_client = to_client
@@ -408,11 +470,25 @@ class WebsocketClient(Thread):
         tornado.ioloop.PeriodicCallback(self.update_socket, 1000).start()
         self.ioloop.start()
 
+    def init_config(self):
+        default_config = {
+            'server_url': 'ws://10.0.0.2:8000/ws'
+        }
+
+        if not os.path.exists('server.conf'):
+            self.server_config['server'] = default_config
+            self.server_config.write(open('server.conf', 'w'))
+        else:
+            self.server_config.read('server.conf')
+            for k in default_config.keys():
+                if k not in self.server_config['server'].keys():
+                    self.server_config['server'][k] = default_config[k]
+
     @gen.coroutine
     def connect(self):
         global running
         try:
-            self.ws = yield tornado.websocket.websocket_connect(server_url, on_message_callback=self.on_message)
+            self.ws = yield tornado.websocket.websocket_connect(self.server_config['server']['server_url'], on_message_callback=self.on_message)
         except:
             if running:
                 time.sleep(2)
@@ -478,12 +554,22 @@ class Webserver(Process):
             self.to_tank.put({ 't': 'connect' })
         
         def on_message(self, msg):
+            # process messages from the websocket
             msg = json.loads(msg)
+            # throttle update
             if msg['t'] == 't':
                 r, l = steering(msg['x'], msg['y'])
                 self.to_tank.put({ 't': 'throttle', 'throttle': (r,l) })
+
+            # tank config update
+            elif msg['t'] == 'update_tank_config':
+                self.to_tank.put(msg)
+
+            # fire weapon
             elif msg['t'] == 'f':
                 self.to_tank.put({ 't': 'fire_weapon' })
+            
+            # process messages from other subprocesses to the websocket
             while not self.to_tornado.empty():
                 msg = self.to_tornado.get()
                 [client.write_message(json.dumps(msg)) for client in self.connections]
