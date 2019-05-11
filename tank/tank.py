@@ -68,12 +68,12 @@ class Tank(Process):
     import laser
     import BNO055
     import INA219
-    def __init__(self, to_tank, to_tornado, to_main):
+    def __init__(self, to_tank, to_tornado, to_client):
         super(Tank, self).__init__()
         self.game_config = {'corners': {'tl': [0,0], 'tr': [640,0], 'bl': [0, 480], 'br': [640, 480]}, 'map_features': []}
         self.objects = {}
         self.to_tank = to_tank
-        self.to_main = to_main
+        self.to_client = to_client
         self.to_tornado = to_tornado
         self.tank_config = configparser.ConfigParser()
         self.init_config()
@@ -457,14 +457,14 @@ class Transponder:
 
 
 class WebsocketClient(Thread):
-    def __init__(self, to_client, to_tank, to_main):
+    def __init__(self, to_client, to_tank, to_tornado):
         super(WebsocketClient, self).__init__()
-        self.server_config = configparser.ConfigParser()
+        self.client_config = configparser.ConfigParser()
         self.init_config()
         self.ioloop = tornado.ioloop.IOLoop.instance()
         self.ws = None
         self.to_client = to_client
-        self.to_main = to_main
+        self.to_tornado = to_tornado
         self.to_tank = to_tank
         self.connect()
         tornado.ioloop.PeriodicCallback(self.update_socket, 1000).start()
@@ -475,20 +475,20 @@ class WebsocketClient(Thread):
             'server_url': 'ws://10.0.0.2:8000/ws'
         }
 
-        if not os.path.exists('server.conf'):
-            self.server_config['server'] = default_config
-            self.server_config.write(open('server.conf', 'w'))
+        if not os.path.exists('client.conf'):
+            self.client_config['client'] = default_config
+            self.client_config.write(open('client.conf', 'w'))
         else:
-            self.server_config.read('server.conf')
+            self.client_config.read('client.conf')
             for k in default_config.keys():
-                if k not in self.server_config['server'].keys():
-                    self.server_config['server'][k] = default_config[k]
+                if k not in self.client_config['client'].keys():
+                    self.client_config['client'][k] = default_config[k]
 
     @gen.coroutine
     def connect(self):
         global running
         try:
-            self.ws = yield tornado.websocket.websocket_connect(self.server_config['server']['server_url'], on_message_callback=self.on_message)
+            self.ws = yield tornado.websocket.websocket_connect(self.client_config['client']['server_url'], on_message_callback=self.on_message, connect_timeout=0.5)
         except:
             if running:
                 time.sleep(2)
@@ -520,6 +520,26 @@ class WebsocketClient(Thread):
     def update_socket(self):
         global running
         if running:
+            while not self.to_client.empty():
+                msg = self.to_client.get()
+                print(msg)
+                if 't' in msg.keys():
+                    if msg['t'] == 'connect':
+                        print('sending config')
+                        self.to_tornado.put({ 't': 'client_config', 'config': dict(self.client_config['client']) })
+                    elif msg['t'] == 'update_client_config' and 'config' in msg.keys():
+                        for k in msg['config'].keys():
+                            self.client_config['client'][k] = msg['config'][k]
+
+                        # save the config
+                        self.client_config.write(open('client.conf', 'w'))
+
+                        # activate the config
+                        self.init_config()
+
+                        # send the new config
+                        self.to_tornado.put({ 't': 'client_config', 'config': dict(self.client_config['client']) })
+       
             self.send(json.dumps({ 't': 'hb', 'tid': ID }))
         else:
             print('Stopping websocket client.')
@@ -527,11 +547,11 @@ class WebsocketClient(Thread):
 
 
 class Webserver(Process):
-    def __init__(self, to_tornado, to_tank, to_main):
+    def __init__(self, to_tornado, to_tank, to_client):
         super(Webserver, self).__init__()
         self.to_tornado = to_tornado
-        self.to_main = to_main
         self.to_tank = to_tank
+        self.to_client = to_client
 
     class MainHandler(tornado.web.RequestHandler):
         def get(self):
@@ -543,15 +563,16 @@ class Webserver(Process):
 
     class WebSocket(tornado.websocket.WebSocketHandler):
 
-        def initialize(self, to_tornado, to_tank, to_main, connections):
+        def initialize(self, to_tornado, to_tank, to_client, connections):
             self.to_tornado = to_tornado
-            self.to_main = to_main
+            self.to_client = to_client
             self.to_tank = to_tank
             self.connections = connections
 
         def open(self):
             self.connections.add(self)
             self.to_tank.put({ 't': 'connect' })
+            self.to_client.put({ 't': 'connect' })
         
         def on_message(self, msg):
             # process messages from the websocket
@@ -564,6 +585,10 @@ class Webserver(Process):
             # tank config update
             elif msg['t'] == 'update_tank_config':
                 self.to_tank.put(msg)
+
+            # client config update
+            elif msg['t'] == 'update_client_config':
+                self.to_client.put(msg)
 
             # fire weapon
             elif msg['t'] == 'f':
@@ -596,7 +621,7 @@ class Webserver(Process):
         public = os.path.join(os.path.dirname(__file__), 'tank_public')
 
         self.webapp = tornado.web.Application([
-            (r"/tank_ws", self.WebSocket, {'to_tornado': self.to_tornado, 'to_main': self.to_main, 'to_tank': self.to_tank, 'connections': self.connections }),
+            (r"/tank_ws", self.WebSocket, {'to_tornado': self.to_tornado, 'to_client': self.to_client, 'to_tank': self.to_tank, 'connections': self.connections }),
             (r'/(.*)', self.MyStaticFileHandler, {'path': public, "default_filename": "index.html" }),
         ])
 
@@ -619,17 +644,17 @@ def main():
     to_tornado = Queue()
     to_tank = Queue()
     to_client = Queue()
-    to_main =Queue()
+    to_main = Queue()
 
     # multiprocs
-    tank = Tank(to_tank, to_tornado, to_main)
+    tank = Tank(to_tank, to_tornado, to_client)
     tank.start()
 
-    web = Webserver(to_tornado, to_tank, to_main)
+    web = Webserver(to_tornado, to_tank, to_client)
     web.start()
 
     # threads
-    cs = WebsocketClient(to_client, to_tank, to_main)
+    cs = WebsocketClient(to_client, to_tank, to_tornado)
     cs.start()
     cs.join()
 

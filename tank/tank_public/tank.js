@@ -22,6 +22,7 @@ let weapon_ready = true;
 let icons = {};
 let objects = {};
 let tank_config = {};
+let client_config = {};
 
 // GAUGES
 let lt_gauge = null;
@@ -41,7 +42,7 @@ function get_center() {
     return { c_x: c_x, c_y: c_y };
 }
 
-// RETICLE
+// HUD
 function draw_hud() {
     // reticle
     let canvas = document.getElementById("hud_canvas");
@@ -165,9 +166,10 @@ function draw_minimap() {
     // position & minimap
     let canvas = document.getElementById("minimap");
     let ctx = canvas.getContext("2d");
-    canvas.width  = canvas.offsetWidth;
-    canvas.height = canvas.offsetHeight;
+    canvas.width = 300;
+    canvas.height = 300;
 
+    ctx.scale(0.5, 0.5);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     //ctx.transform(1, 0, 0, -1, 0, canvas.height);
     let center = get_center();
@@ -222,7 +224,7 @@ function draw_minimap() {
         }
     }
 
-
+    // draw map anchors
     for (i = 0; i < anchors.length; i++) {
         if (i == 0)
             ctx.fillStyle = "green";
@@ -232,7 +234,6 @@ function draw_minimap() {
             ctx.fillStyle = "blue";
         ctx.fillRect(anchors[i].x - 2, anchors[i].y - 2, 4, 4);
     }
-
 }
 
 // update drawing frame / hud
@@ -321,6 +322,8 @@ function connect() {
             }
         } else if (msg['t'] == 'tank_config') {
             tank_config = msg['config'];
+        } else if (msg['t'] == 'client_config') {
+            client_config = msg['config'];
         }
     };
 }
@@ -362,25 +365,51 @@ function toggle_full_screen() {
 
 document.getElementById("config-button").addEventListener("click", function() {
     var config_dialog = document.getElementById('config-dialog');
-    var config_html = document.getElementById('config');
+    var tank_config_div = document.getElementById('tank-config');
+    var client_config_div = document.getElementById('client-config');
+
+    // tank config
     html = '<div class="config-options">';
     keys = Object.keys(tank_config);
     for (i = 0; i < keys.length; i++) {
         html += '<div class="config-label">' + keys[i] + '</div><input type="text" class="config-input" value="' + tank_config[keys[i]] + '">';
     }
     html +=  '</div';
-    config_html.innerHTML = html;
+    tank_config_div.innerHTML = html;
+
+    // client config
+    html = '<div class="config-options">';
+    keys = Object.keys(client_config);
+    for (i = 0; i < keys.length; i++) {
+        html += '<div class="config-label">' + keys[i] + '</div><input type="text" class="config-input" value="' + client_config[keys[i]] + '">';
+    }
+    html +=  '</div';
+    client_config_div.innerHTML = html;
+
     config_dialog.show();
 }, false);
 
 document.getElementById("save-config-button").addEventListener("click", function() {
-    var options = document.getElementById('config').childNodes[0].childNodes;
+    // send tank config
+    var options = document.getElementById('tank-config').childNodes[0].childNodes;
     var new_config = {};
+
     for (var i = 0; i < options.length; i+=2) {
         new_config[options[i].textContent] =  options[i+1].value;
     }
     var msg = { t: 'update_tank_config', config: new_config };
     ws.send(JSON.stringify(msg));
+
+    // send client config
+    options = document.getElementById('client-config').childNodes[0].childNodes;
+    new_config = {};
+
+    for (i = 0; i < options.length; i+=2) {
+        new_config[options[i].textContent] =  options[i+1].value;
+    }
+    msg = { t: 'update_client_config', config: new_config };
+    ws.send(JSON.stringify(msg));
+
     document.getElementById('config-dialog').close();
 }, false);
 
