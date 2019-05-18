@@ -320,8 +320,10 @@ function connect() {
                 if (msg['config'] && msg['config']['map_features'])
                     map_features = msg['config']['map_features'];
             }
+
         } else if (msg['t'] == 'tank_config') {
             tank_config = msg['config'];
+
         } else if (msg['t'] == 'client_config') {
             client_config = msg['config'];
         }

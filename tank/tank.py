@@ -234,7 +234,7 @@ class Tank(Thread):
         brake_time = 100
         t30s_time = curr_time
         failsafe_time = curr_time
-        t100ms_time = curr_time
+        t25ms_time = curr_time
         weapon_reload_time = 0
 
         # position
@@ -268,7 +268,7 @@ class Tank(Thread):
                     self.weapon_ready = True
 
             # poll sensors
-            if curr_time - t100ms_time > 100:
+            if curr_time - t25ms_time > 25:
                 # IMU --------------------------------------------------------------------
                 # poll imu
                 if self.imu_enabled and self.bno:
@@ -457,8 +457,8 @@ class Tank(Thread):
                                 self.pi.set_PWM_dutycycle(self.right_pwm_r, abs(r_t))
 
             # send current status
-            if curr_time - t100ms_time > 100:
-                t100ms_time = curr_time
+            if curr_time - t25ms_time > 25:
+                t25ms_time = curr_time
                 self.tank_pipe.send({ 't': 'status', 'current': self.current, 'volts': self.volts, 'l_t': l_t, 'r_t': r_t, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality, 'objects': self.objects })
 
             # prevent busy waiting
@@ -515,7 +515,11 @@ class Webserver(Thread):
 
     def tankserver_send(self, msg):
         if self.tankserver_ws != None:
-            self.tankserver_ws.write_message(msg)
+            try:
+                self.tankserver_ws.write_message(msg)
+            except:
+                self.tankserver_ws.close()
+                self.tankserver_ws = None
             return True
         return False
 
@@ -598,7 +602,11 @@ class Webserver(Thread):
                 self.send(msg)
 
         def send(self, msg):
-            [client.write_message(json.dumps(msg)) for client in self.connections]
+            for client in self.connections:
+                try:
+                    client.write_message(json.dumps(msg)) 
+                except:
+                    client.close()
 
         def on_close(self):
             self.connections.remove(self)
