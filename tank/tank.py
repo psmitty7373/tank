@@ -3,8 +3,9 @@
 import configparser, json, math, pickle, pigpio, os, signal, struct, time
 from hashlib import md5
 from multiprocessing import Process
-from multiprocessing import Queue
+from multiprocessing import Pipe
 from multiprocessing import set_start_method
+import asyncio
 import tornado.ioloop
 import tornado.web as web
 import tornado.websocket
@@ -15,7 +16,7 @@ from uuid import getnode as get_mac
 import cProfile as profile
 
 running = True
-
+mode = 'threaded'
 
 # load settings
 ID = int(md5(str(hex(get_mac())).encode('ascii')).hexdigest()[0:6], 16)
@@ -64,19 +65,42 @@ def steering(x, y, min_throttle=50.0):
         l = math.copysign(translate(abs(l), 0, 255, min_throttle, 255), l)
     return (round(r), round(l))
 
-class Tank(Process):
+class Tank(Thread):
     import laser
     import BNO055
     import INA219
-    def __init__(self, to_tank, to_tornado, to_client):
+
+    # IR Transponder Class
+    class Transponder:
+        def __init__(self, pi, gpio, fps=40, clear=False):
+            self.pi = pi
+            self.pi.write(gpio, 1)
+            if clear:
+                self.pi.wave_clear()
+            pi.wave_add_new()
+            pi.wave_add_generic([pigpio.pulse(1 << gpio, 0, 25000)])
+            self.w_mark = pi.wave_create()
+            pi.wave_add_generic([pigpio.pulse(0, 1 << gpio, 25000)])
+            self.w_space = pi.wave_create()
+            self.beacon_wave = [255, 0] + [self.w_mark] * 8 + [self.w_space] * 2 + [255, 3]
+            self.poll_wave = [255, 0] + [self.w_mark] * 4 + [self.w_space] * 6 + [255, 1, 4, 0] + [255, 0] + [self.w_mark] * 8 + [self.w_space] * 2 + [255, 3]
+
+        def beacon(self):
+            self.pi.wave_chain(self.beacon_wave)
+
+        def poll(self):
+            self.pi.wave_chain(self.poll_wave)
+
+    def __init__(self, tank_pipe):
         super(Tank, self).__init__()
         self.game_config = {'corners': {'tl': [0,0], 'tr': [640,0], 'bl': [0, 480], 'br': [640, 480]}, 'map_features': []}
         self.objects = {}
-        self.to_tank = to_tank
-        self.to_client = to_client
-        self.to_tornado = to_tornado
+        self.tank_pipe = tank_pipe
         self.tank_config = configparser.ConfigParser()
         self.init_config()
+
+        self.bno = None
+        self.ina = None
        
     def shutdown(self, signal, frame):
         print('Stopping tank.')
@@ -90,15 +114,19 @@ class Tank(Process):
             'right_pwm_f': { 'default': 27, 'type': int, 'check': lambda x: int(x) >= 1 and float(x) <= 29 },
             'right_pwm_r': { 'default': 22, 'type': int, 'check': lambda x: int(x) >= 1 and float(x) <= 29 },
             'left_pwm_f': { 'default': 18, 'type': int, 'check': lambda x: int(x) >= 1 and float(x) <= 29 },
-            'left_pwm_r': { 'default': 17, 'type': int, 'check': lambda x: int(x) >= 1 and float(x) <= 29 }
+            'left_pwm_r': { 'default': 17, 'type': int, 'check': lambda x: int(x) >= 1 and float(x) <= 29 },
+            'ir_pin': { 'default': 4, 'type': int, 'check': lambda x: int(x) >= 1 and float(x) <= 29 }
         }
 
         if not os.path.exists('tank.conf'):
+            print('Creating new tank.conf.')
+            self.tank_config['tank'] = {}
             for k in default_config.keys():
-                self.tank_config['tank'] = default_config[k]['default']
+                self.tank_config['tank'][k] = str(default_config[k]['default'])
             self.tank_config.write(open('tank.conf', 'w'))
 
         else:
+            print('Loading tank.conf.')
             self.tank_config.read('tank.conf')
             # verify existing config options
             for k in self.tank_config['tank'].keys():
@@ -130,15 +158,15 @@ class Tank(Process):
         self.current_enabled = self.tank_config['tank']['current_enabled'] == 'True'
 
 
-    #def run(self):
-    #    profile.runctx('self.run2()', globals(), locals())
+#    def run(self):
+#        profile.runctx('self.run2()', globals(), locals())
 
     def run(self):
         print('Starting tank.')
         self.running = True
 
         # init signal handler
-        signal.signal(signal.SIGINT, self.shutdown)
+        #signal.signal(signal.SIGINT, self.shutdown)
 
         #init pigpio
         self.pi = pigpio.pi('localhost', 9999)
@@ -149,25 +177,32 @@ class Tank(Process):
 
         #init imu
         if self.imu_enabled:
-            self.bno = self.BNO055.BNO055()
-            if self.bno.begin() is not True:
-                print("Error initializing device")
-                return False
-            self.bno.setExternalCrystalUse(True)
-            if os.path.isfile('imu.conf'):
-                print("Loaded imu.conf")
-                with open('imu.conf','rb') as f:
-                    cd = pickle.load(f)
-                    self.bno.setCalibrationData(cd)
-        else:
-            self.bno = None
+            try:
+                self.bno = self.BNO055.BNO055()
+
+                if self.bno.begin() is not True:
+                    raise
+
+                self.bno.setExternalCrystalUse(True)
+                if os.path.isfile('imu.conf'):
+                    print("Loading imu.conf.")
+                    with open('imu.conf','rb') as f:
+                        cd = pickle.load(f)
+                        self.bno.setCalibrationData(cd)
+            except:
+                print("Error initializing IMU.")
+                self.bno = None
 
         #init ina219
         if self.current_enabled:
-            self.ina = self.INA219.INA219(bus=3, address=0x44)
+            try :
+                self.ina = self.INA219.INA219(bus=3, address=0x44)
+            except:
+                print('Error initializing Current Sensor.')
+                self.ina = None
 
         #init transponder
-        self.trans = Transponder(self.pi, 12)
+        self.trans = self.Transponder(self.pi, 4)
         self.trans.beacon()
 
         curr_time = time.time() * 1000
@@ -239,13 +274,13 @@ class Tank(Process):
                 # poll imu
                 if self.imu_enabled and self.bno:
                     self.azim_x, self.azim_y, self.azim_z = self.bno.getVector(self.BNO055.BNO055.VECTOR_EULER)
-                    calib = self.bno.getCalibrationStatus()
                     if curr_time - t30s_time > 30000:
+                        calib = self.bno.getCalibrationStatus()
                         if calib[0] == 3 and calib[1] == 3 and calib[3] == 3:
                             cd = self.bno.getCalibrationData()
                             with open('imu.conf', 'wb') as f:
                                 pickle.dump(cd, f)
-                            t30s_time = curr_time
+                        t30s_time = curr_time
 
                 # INA219 ----------------------------------------------------------------
                 if self.current_enabled and self.ina:
@@ -253,10 +288,9 @@ class Tank(Process):
                     self.current = self.ina.get_current()
 
             # handle all messages in the queue
-            while not self.to_tank.empty():
+            while self.tank_pipe.poll():
                 failsafe_time = curr_time
-                msg = self.to_tank.get()
-
+                msg = self.tank_pipe.recv()
 
                 if 't' in msg.keys():
                     # fire
@@ -298,17 +332,17 @@ class Tank(Process):
                         self.init_config()
 
                         # send the new config
-                        self.to_tornado.put({ 't': 'tank_config', 'config': dict(self.tank_config['tank']) })
+                        self.tank_pipe.send({ 't': 'tank_config', 'config': dict(self.tank_config['tank']) })
 
                     # if we get an game_config, blast it out
                     elif msg['t'] == 'game_config' and 'config' in msg.keys():
                         self.game_config = msg['config']
-                        self.to_tornado.put(msg)
+                        self.tank_pipe.send(msg)
 
                     # when a client connects send the current game_config
                     elif msg['t'] == 'connect':
-                        self.to_tornado.put({ 't': 'game_config', 'config': self.game_config })
-                        self.to_tornado.put({ 't': 'tank_config', 'config': dict(self.tank_config['tank']) })
+                        self.tank_pipe.send({ 't': 'game_config', 'config': self.game_config })
+                        self.tank_pipe.send({ 't': 'tank_config', 'config': dict(self.tank_config['tank']) })
 
                     # throttle
                     elif msg['t'] == "throttle" and 'throttle' in msg.keys():
@@ -424,9 +458,9 @@ class Tank(Process):
                                 self.pi.set_PWM_dutycycle(self.right_pwm_r, abs(r_t))
 
             # send current status
-            if not self.to_tornado.full() and curr_time - t100ms_time > 100:
+            if curr_time - t100ms_time > 100:
                 t100ms_time = curr_time
-                self.to_tornado.put({ 't': 'status', 'current': self.current, 'volts': self.volts, 'l_t': l_t, 'r_t': r_t, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality, 'objects': self.objects })
+                self.tank_pipe.send({ 't': 'status', 'current': self.current, 'volts': self.volts, 'l_t': l_t, 'r_t': r_t, 'x': self.pos_x, 'y': self.pos_y, 'z': self.pos_z, 'a_x': self.azim_x, 'a_y': self.azim_y, 'a_z': self.azim_z, 'quality': self.pos_quality, 'objects': self.objects })
 
             # prevent busy waiting
             time.sleep(0.05)
@@ -435,41 +469,19 @@ class Tank(Process):
         self.pi.stop()
 
 
-class Transponder:
-    def __init__(self, pi, gpio, fps=40, clear=False):
-        self.pi = pi
-        self.pi.write(gpio, 1)
-        if clear:
-            self.pi.wave_clear()
-        pi.wave_add_new()
-        pi.wave_add_generic([pigpio.pulse(1 << gpio, 0, 25000)])
-        self.w_mark = pi.wave_create()
-        pi.wave_add_generic([pigpio.pulse(0, 1 << gpio, 25000)])
-        self.w_space = pi.wave_create()
+class Webserver(Thread):
+    def __init__(self, tank_pipe):
+        super(Webserver, self).__init__()
+        self.tank_pipe = tank_pipe
 
-    def beacon(self):
-        chain = [255, 0] + [self.w_mark] * 8 + [self.w_space] * 2 + [255, 3]
-        self.pi.wave_chain(chain)
-
-    def poll(self):
-        chain = [255, 0] + [self.w_mark] * 4 + [self.w_space] * 6 + [255, 1, 4, 0] + [255, 0] + [self.w_mark] * 8 + [self.w_space] * 2 + [255, 3]
-        self.pi.wave_chain(chain)
-
-
-class WebsocketClient(Thread):
-    def __init__(self, to_client, to_tank, to_tornado):
-        super(WebsocketClient, self).__init__()
         self.client_config = configparser.ConfigParser()
         self.init_config()
-        self.ioloop = tornado.ioloop.IOLoop.instance()
-        self.ws = None
-        self.to_client = to_client
-        self.to_tornado = to_tornado
-        self.to_tank = to_tank
-        self.connect()
-        tornado.ioloop.PeriodicCallback(self.update_socket, 1000).start()
-        self.ioloop.start()
+        self.client_ws = None
+        self.websocket_handler = None
 
+        self.server_pipe = Pipe(True)
+
+    # CLIENT
     def init_config(self):
         default_config = {
             'server_url': 'ws://10.0.0.2:8000/ws'
@@ -485,74 +497,58 @@ class WebsocketClient(Thread):
                     self.client_config['client'][k] = default_config[k]
 
     @gen.coroutine
-    def connect(self):
+    def client_connect(self):
         global running
         try:
-            self.ws = yield tornado.websocket.websocket_connect(self.client_config['client']['server_url'], on_message_callback=self.on_message, connect_timeout=0.5)
+            print('Trying to connect...')
+            self.client_ws = yield tornado.websocket.websocket_connect(self.client_config['client']['server_url'], on_message_callback=self.on_message, connect_timeout=0.5)
         except:
-            if running:
-                time.sleep(2)
-                self.connect()
-            else:
-                self.ioloop.stop()
+            self.client_ws = None
         else:
-            self.send(json.dumps({ 't':'join', 'tid': ID }))
+            self.client_send(json.dumps({ 't':'join', 'tid': ID }))
 
     def on_message(self, msg):
         if msg == None:
-            if self.ws:
-                self.ws.close()
-            self.ws = None
-            time.sleep(2)
-            self.connect()
+            if self.client_ws:
+                self.client_ws.close()
+                self.client_ws = None
         else:
-            self.to_tank.put(json.loads(msg))
+            self.tank_pipe.send(json.loads(msg))
 
-    def send(self, msg):
-        if not self.ws == None:
-            self.ws.write_message(msg)
+    def client_send(self, msg):
+        if self.client_ws != None:
+            self.client_ws.write_message(msg)
             return True
         return False
 
-    def stop(self):
-        self.ioloop.stop()
-
-    def update_socket(self):
+    def periodic_update(self):
         global running
         if running:
-            while not self.to_client.empty():
-                msg = self.to_client.get()
-                print(msg)
-                if 't' in msg.keys():
-                    if msg['t'] == 'connect':
-                        print('sending config')
-                        self.to_tornado.put({ 't': 'client_config', 'config': dict(self.client_config['client']) })
-                    elif msg['t'] == 'update_client_config' and 'config' in msg.keys():
-                        for k in msg['config'].keys():
-                            self.client_config['client'][k] = msg['config'][k]
+            if self.client_ws:
+                self.client_send(json.dumps({ 't': 'hb', 'tid': ID }))
+            else:
+                self.client_connect()
 
-                        # save the config
-                        self.client_config.write(open('client.conf', 'w'))
+            if self.websocket_handler:
+                self.websocket_handler.flush_pipe()
 
-                        # activate the config
-                        self.init_config()
-
-                        # send the new config
-                        self.to_tornado.put({ 't': 'client_config', 'config': dict(self.client_config['client']) })
-       
-            self.send(json.dumps({ 't': 'hb', 'tid': ID }))
         else:
-            print('Stopping websocket client.')
-            self.ioloop.stop()
+            print('Stopping tornado.')
+            [client.close() for client in self.connections]
+            tornado.ioloop.IOLoop.current().stop()
+
+    def update_client_config(self, config):
+        for k in config.keys():
+            self.client_config['client'][k] = config[k]
+
+        # save the config
+        self.client_config.write(open('client.conf', 'w'))
+
+        # activate the config
+        self.init_config()
 
 
-class Webserver(Process):
-    def __init__(self, to_tornado, to_tank, to_client):
-        super(Webserver, self).__init__()
-        self.to_tornado = to_tornado
-        self.to_tank = to_tank
-        self.to_client = to_client
-
+    # SERVER
     class MainHandler(tornado.web.RequestHandler):
         def get(self):
             self.render("index.html")
@@ -563,16 +559,16 @@ class Webserver(Process):
 
     class WebSocket(tornado.websocket.WebSocketHandler):
 
-        def initialize(self, to_tornado, to_tank, to_client, connections):
-            self.to_tornado = to_tornado
-            self.to_client = to_client
-            self.to_tank = to_tank
+        def initialize(self, tank_pipe, by_ref, connections):
+            self.tank_pipe = tank_pipe
             self.connections = connections
+            by_ref.websocket_handler = self
+            self.parent = by_ref
 
         def open(self):
             self.connections.add(self)
-            self.to_tank.put({ 't': 'connect' })
-            self.to_client.put({ 't': 'connect' })
+            self.tank_pipe.send({ 't': 'connect' })
+            self.send({ 't': 'client_config', 'config': dict(self.parent.client_config['client']) })
         
         def on_message(self, msg):
             # process messages from the websocket
@@ -580,31 +576,34 @@ class Webserver(Process):
             # throttle update
             if msg['t'] == 't':
                 r, l = steering(msg['x'], msg['y'])
-                self.to_tank.put({ 't': 'throttle', 'throttle': (r,l) })
+                self.tank_pipe.send({ 't': 'throttle', 'throttle': (r,l) })
 
             # tank config update
             elif msg['t'] == 'update_tank_config':
-                self.to_tank.put(msg)
+                self.tank_pipe.send(msg)
 
             # client config update
-            elif msg['t'] == 'update_client_config':
-                self.to_client.put(msg)
+            elif msg['t'] == 'update_client_config' and 'config' in msg.keys():
+                print('updating config')
+                self.parent.update_client_config(msg['config'])
+                self.send({ 't': 'client_config', 'config': dict(self.parent.client_config['client']) })
 
             # fire weapon
             elif msg['t'] == 'f':
-                self.to_tank.put({ 't': 'fire_weapon' })
+                self.tank_pipe.send({ 't': 'fire_weapon' })
+
+            self.flush_pipe()
             
-            # process messages from other subprocesses to the websocket
-            while not self.to_tornado.empty():
-                msg = self.to_tornado.get()
-                [client.write_message(json.dumps(msg)) for client in self.connections]
+        def flush_pipe(self):
+            while self.tank_pipe.poll():
+                msg = self.tank_pipe.recv()
+                self.send(msg)
+
+        def send(self, msg):
+            [client.write_message(json.dumps(msg)) for client in self.connections]
 
         def on_close(self):
             self.connections.remove(self)
-
-    def update_socket(self):
-        if not self.running:
-            [client.close() for client in self.connections]
 
     def signal_handler(self, signal, frame):
         print("Stopping Tornado.")
@@ -614,19 +613,21 @@ class Webserver(Process):
     def run(self):
         self.running = True
         print('Starting webserver.')
-        signal.signal(signal.SIGINT, self.signal_handler)
+        #signal.signal(signal.SIGINT, self.signal_handler)
 
         self.connections = set()
 
         public = os.path.join(os.path.dirname(__file__), 'tank_public')
 
         self.webapp = tornado.web.Application([
-            (r"/tank_ws", self.WebSocket, {'to_tornado': self.to_tornado, 'to_client': self.to_client, 'to_tank': self.to_tank, 'connections': self.connections }),
+            (r"/tank_ws", self.WebSocket, {'tank_pipe': self.tank_pipe, 'by_ref': self, 'connections': self.connections }),
             (r'/(.*)', self.MyStaticFileHandler, {'path': public, "default_filename": "index.html" }),
         ])
 
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         self.webapp.listen(8000)
-        tornado.ioloop.PeriodicCallback(self.update_socket, 1000).start()
+        tornado.ioloop.PeriodicCallback(self.periodic_update, 1000).start()
         tornado.ioloop.IOLoop.current().start()
 
 def signal_handler(signal, frame):
@@ -636,27 +637,30 @@ def signal_handler(signal, frame):
     return
 
 def main():
+    global running
     print('Starting Tank 1.0.')
     signal.signal(signal.SIGINT, signal_handler)
 
     set_start_method('spawn')
 
-    to_tornado = Queue()
-    to_tank = Queue()
-    to_client = Queue()
-    to_main = Queue()
+    tank_pipe = Pipe(True)
 
     # multiprocs
-    tank = Tank(to_tank, to_tornado, to_client)
+    tank = Tank(tank_pipe[0])
     tank.start()
 
-    web = Webserver(to_tornado, to_tank, to_client)
+    web = Webserver(tank_pipe[1])
     web.start()
 
-    # threads
-    cs = WebsocketClient(to_client, to_tank, to_tornado)
-    cs.start()
-    cs.join()
+    while running:
+        time.sleep(0.5)
+
+    if mode == 'threaded':
+        tank.running = False
+        tank.join()
+        web.running = False
+        web.join()
+
 
     print('Shut down.')
 

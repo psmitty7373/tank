@@ -40,11 +40,13 @@ body {
 
 #config-dialog {
     z-index: 30;
+    min-width: 300px;
     width: 50%;
     background-color: gray;
     font-family: ocr-a-std;
     text-align: center;
-    max-height: 80%;
+    max-height: 70%;
+    top: 10%;
     overflow-y: scroll;
 }
 
@@ -63,13 +65,14 @@ body {
 .config-input {
     width: 100%;
     font-family: ocr-a-std;
-    font-size: 10px;
+    font-size: 14px;
     margin-bottom: 10px;
 }
 
 .config-label {
     width: 100%;
     text-align: right;
+    font-size: 20px;
 }
 
 .config-button {

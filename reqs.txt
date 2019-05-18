@@ -1,3 +1,4 @@
+# server
 python3-pip
 pigpio, asyncio, websockets
 python3-pigpio
@@ -6,16 +7,23 @@ python3-tornado
 python3-smbus
 python3-asyncio
 
+# tank
 enable camera, spi
-sudo apt install python3-pip
-sudo apt install pigpio
-sudo systemctle enable pigpiod
-sudo vi /lib/systemd/system/pigpiod.service (add -p 9999 to execstart)
-sudo systemctl restart pigpiod
-sudo apt install python3-pigpio
-sudo pip3 install numpy (had to increase swap)
-sudo pip3 install tornado
-sudo pip3 install smbus
+1. sudo apt install python3-pip pigpio python3-pigpio
+2. sudo apt install gtk+-3.0
+3. sudo cp deps/pigpiod.service /lib/systemd/system/pigpiod.service
+4. sudo systemctl enable pigpiod
+5. sudo systemctl restart pigpiod
+6. sudo pip3 install tornado smbus
+
+
 sudo dpkg -i deps/rws_0.73.2_armhf.deb
 sudo systemctl enable rws
 udo apt install i2c-tools
+
+
+sudo systemctl disable triggerhappy.service
+sudo systemctl disable triggerhappy.socket
+sudo systemctl disable ModemManager.service
+sudo systemctl disable hciuart.service
+sudo systemctl disable bluetooth.service

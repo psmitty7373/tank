@@ -58,3 +58,4 @@ start_x=1
 gpu_mem=128
 
 dtoverlay=i2c-gpio,bus=3
+dtoverlay=pi3-disable-bt
