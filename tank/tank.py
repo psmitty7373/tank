@@ -130,7 +130,6 @@ class Tank(Thread):
             self.tank_config.read('tank.conf')
             # verify existing config options
             for k in self.tank_config['tank'].keys():
-                print(k, self.tank_config['tank'][k])
                 if k in default_config.keys():
                     try:
                         if default_config[k]['check'](self.tank_config['tank'][k]):
@@ -474,9 +473,9 @@ class Webserver(Thread):
         super(Webserver, self).__init__()
         self.tank_pipe = tank_pipe
 
-        self.client_config = configparser.ConfigParser()
+        self.tankserver_config = configparser.ConfigParser()
         self.init_config()
-        self.client_ws = None
+        self.tankserver_ws = None
         self.websocket_handler = None
 
         self.server_pipe = Pipe(True)
@@ -487,45 +486,44 @@ class Webserver(Thread):
             'server_url': 'ws://10.0.0.2:8000/ws'
         }
 
-        if not os.path.exists('client.conf'):
-            self.client_config['client'] = default_config
-            self.client_config.write(open('client.conf', 'w'))
+        if not os.path.exists('tankserver.conf'):
+            self.tankserver_config['tankserver'] = default_config
+            self.tankserver_config.write(open('tankserver.conf', 'w'))
         else:
-            self.client_config.read('client.conf')
+            self.tankserver_config.read('tankserver.conf')
             for k in default_config.keys():
-                if k not in self.client_config['client'].keys():
-                    self.client_config['client'][k] = default_config[k]
+                if k not in self.tankserver_config['tankserver'].keys():
+                    self.tankserver_config['tankserver'][k] = default_config[k]
 
     @gen.coroutine
     def client_connect(self):
         global running
         try:
-            print('Trying to connect...')
-            self.client_ws = yield tornado.websocket.websocket_connect(self.client_config['client']['server_url'], on_message_callback=self.on_message, connect_timeout=0.5)
+            self.tankserver_ws = yield tornado.websocket.websocket_connect(self.tankserver_config['tankserver']['server_url'], on_message_callback=self.on_message, connect_timeout=0.5)
         except:
-            self.client_ws = None
+            self.tankserver_ws = None
         else:
-            self.client_send(json.dumps({ 't':'join', 'tid': ID }))
+            self.tankserver_send(json.dumps({ 't':'join', 'tid': ID }))
 
     def on_message(self, msg):
         if msg == None:
-            if self.client_ws:
-                self.client_ws.close()
-                self.client_ws = None
+            if self.tankserver_ws:
+                self.tankserver_ws.close()
+                self.tankserver_ws = None
         else:
             self.tank_pipe.send(json.loads(msg))
 
-    def client_send(self, msg):
-        if self.client_ws != None:
-            self.client_ws.write_message(msg)
+    def tankserver_send(self, msg):
+        if self.tankserver_ws != None:
+            self.tankserver_ws.write_message(msg)
             return True
         return False
 
     def periodic_update(self):
         global running
         if running:
-            if self.client_ws:
-                self.client_send(json.dumps({ 't': 'hb', 'tid': ID }))
+            if self.tankserver_ws:
+                self.tankserver_send(json.dumps({ 't': 'hb', 'tid': ID }))
             else:
                 self.client_connect()
 
@@ -537,12 +535,12 @@ class Webserver(Thread):
             [client.close() for client in self.connections]
             tornado.ioloop.IOLoop.current().stop()
 
-    def update_client_config(self, config):
+    def update_tankserver_config(self, config):
         for k in config.keys():
-            self.client_config['client'][k] = config[k]
+            self.tankserver_config['tankserver'][k] = config[k]
 
         # save the config
-        self.client_config.write(open('client.conf', 'w'))
+        self.tankserver_config.write(open('tankserver.conf', 'w'))
 
         # activate the config
         self.init_config()
@@ -568,7 +566,7 @@ class Webserver(Thread):
         def open(self):
             self.connections.add(self)
             self.tank_pipe.send({ 't': 'connect' })
-            self.send({ 't': 'client_config', 'config': dict(self.parent.client_config['client']) })
+            self.send({ 't': 'tankserver_config', 'config': dict(self.parent.tankserver_config['tankserver']) })
         
         def on_message(self, msg):
             # process messages from the websocket
@@ -582,11 +580,11 @@ class Webserver(Thread):
             elif msg['t'] == 'update_tank_config':
                 self.tank_pipe.send(msg)
 
-            # client config update
-            elif msg['t'] == 'update_client_config' and 'config' in msg.keys():
+            # tankserver config update
+            elif msg['t'] == 'update_tankserver_config' and 'config' in msg.keys():
                 print('updating config')
-                self.parent.update_client_config(msg['config'])
-                self.send({ 't': 'client_config', 'config': dict(self.parent.client_config['client']) })
+                self.parent.update_tankserver_config(msg['config'])
+                self.send({ 't': 'tankserver_config', 'config': dict(self.parent.tankserver_config['tankserver']) })
 
             # fire weapon
             elif msg['t'] == 'f':
