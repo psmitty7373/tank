@@ -259,7 +259,7 @@ function update(ts) {
 
 // connect to tank
 function connect() {
-    websocket_url = "ws://" + location.hostname + ':8000/tank_ws';
+    websocket_url = "ws://" + location.host + '/tank_ws';
     ws = new WebSocket(websocket_url);
     ws.onclose = function() {
         setTimeout(function() {

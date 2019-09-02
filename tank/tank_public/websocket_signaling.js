@@ -17,10 +17,10 @@ function WebSocketSignalingChannel(remoteVideo, wsPath) {
 WebSocketSignalingChannel.prototype.connectWebSocket = function () {
     var websocket_url;
     var websocket_url_path = this.wsPath_ || "/rws/ws";
-    if( this.isPrivateIPaddress_( location.host ) )
+//    if( this.isPrivateIPaddress_( location.host ) )
         websocket_url = "ws://" + location.hostname + ':8889' + websocket_url_path;
-    else
-        websocket_url = "wss://" + location.host + websocket_url_path;
+//    else
+//        websocket_url = "wss://" + location.host + websocket_url_path;
     trace("WebSocket URL : " + websocket_url);
 
     this.websocket_ = new WebSocket(websocket_url);

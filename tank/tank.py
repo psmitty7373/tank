@@ -46,7 +46,7 @@ def steering(x, y, min_throttle=50.0):
     premix_l = premix_l * y
     premix_r = premix_r * y
 
-    piv_speed = 0.15 * x
+    piv_speed = 0.55 * x
     if abs(y) > 0.3:
         piv_scale = 0.0
     else:
@@ -483,7 +483,8 @@ class Webserver(Thread):
     # CLIENT
     def init_config(self):
         default_config = {
-            'server_url': 'ws://10.0.0.2:8000/ws'
+            'server_url': 'ws://10.0.0.2:8000/ws',
+            'server_enabled': { 'default': False, 'type': bool, 'check': lambda x: x == 'True' or x == 'False' }
         }
 
         if not os.path.exists('tankserver.conf'):
@@ -494,6 +495,8 @@ class Webserver(Thread):
             for k in default_config.keys():
                 if k not in self.tankserver_config['tankserver'].keys():
                     self.tankserver_config['tankserver'][k] = default_config[k]
+
+        self.server_enabled = self.tankserver_config['tankserver']['server_enabled'] == 'True'
 
     @gen.coroutine
     def client_connect(self):
@@ -526,10 +529,11 @@ class Webserver(Thread):
     def periodic_update(self):
         global running
         if running:
-            if self.tankserver_ws:
-                self.tankserver_send(json.dumps({ 't': 'hb', 'tid': ID }))
-            else:
-                self.client_connect()
+            if self.server_enabled:
+                if self.tankserver_ws:
+                    self.tankserver_send(json.dumps({ 't': 'hb', 'tid': ID }))
+                else:
+                    self.client_connect()
 
             if self.websocket_handler:
                 self.websocket_handler.flush_pipe()
@@ -633,7 +637,9 @@ class Webserver(Thread):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self.webapp.listen(8000)
+
         tornado.ioloop.PeriodicCallback(self.periodic_update, 1000).start()
+
         tornado.ioloop.IOLoop.current().start()
 
 def signal_handler(signal, frame):
