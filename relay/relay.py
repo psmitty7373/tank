@@ -67,8 +67,9 @@ class Client(Thread):
             print ('Opened:', s.eport, s.sport, s.lport)
 
             return True
+
         except:
-            print('Connection Exception!')
+            print('Error connecting to server.')
             return False
 
     def kill(self):
@@ -83,8 +84,11 @@ class Client(Thread):
                 if not self.connect(self.server_ip, self.server_port, master=True):
                     time.sleep(5)
                     continue
+            try:
+                ins = select.select(list(self.socks.values()), [], [], 0.01)[0]
+            except:
+                print('Socket selection error!')
 
-            ins = select.select(list(self.socks.values()), [], [], 0.01)[0]
             for s in ins:
                 if s in self.socks.values():
                     try:
@@ -109,8 +113,13 @@ class Client(Thread):
                         # lost client
                         else:
                             bin_data = struct.pack('<BHH' + str(len(data)) + 's', CLOSE, s.sport-1, s.eport, b'\0')
-                            bin_data = struct.pack('<I', len(bin_data)) + bin_data
-                            self.master_sock.send(bin_data)
+                            bin_data = struct.pack('<I', len(bin_data)) + bin_dat
+                            try:
+                                self.master_sock.send(bin_data)
+                            except:
+                                print('Transmit error.')
+                                self.kill()
+                                continue
 
                         # remove port
                         del self.socks[s.eport]
@@ -133,12 +142,23 @@ class Client(Thread):
 
                             elif data['cmd'] == DATA:
                                 if data['eport'] in self.socks.keys():
-                                    self.socks[data['eport']].send(data['payload'])
+                                    try:
+                                        self.socks[data['eport']].send(data['payload'])
+                                    except:
+                                        print('Transmit error.')
+                                        self.socks[data['eport']].close()
+                                        del self.socks[data['eport']]
+
                         else:
                             # TODO: fix -1
                             bin_data = struct.pack('<BHH' + str(len(data)) + 's', DATA, s.sport-1, s.eport, data)
                             bin_data = struct.pack('<I', len(bin_data)) + bin_data
-                            self.master_sock.send(bin_data)
+                            try:
+                                self.master_sock.send(bin_data)
+                            except:
+                                print('Transmit error')
+                                self.kill()
+                                continue
                 else:
                     s.close()
 
@@ -214,12 +234,19 @@ class Listener(Thread):
         self.socks = {}
 
     def start_socket(self):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.setblocking(0)
-        s.bind((self.ip, self.port))
-        s.listen(25)
-        self.socks[0] = s
+        print('Starting socket:', self.port)
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.setblocking(0)
+            s.bind((self.ip, self.port))
+            s.listen(25)
+            self.socks[0] = s
+        except:
+            self.kill()
+            return False
+
+        return True
 
     def stop_socket(self):
         print('Stopping!', self.port)
@@ -277,7 +304,9 @@ class Listener(Thread):
                     if data == b'':
                         # lost master
                         if self.is_master:
-                            self.start_socket()
+                            if not self.start_socket():
+                                continue
+
                             self.pipe[1].send({'sport': s.getsockname()[1], 'eport': addr[1], 'cmd': NOTREADY, 'payload': b'\0'})
 
                         # lost client
