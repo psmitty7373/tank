@@ -15,6 +15,8 @@ READY = 3
 NOTREADY = 4
 ERROR = 5
 
+running = True
+
 class CustomSocket(socket.socket):
     def __init__(self, *args, **kwargs):
         super(CustomSocket, self).__init__(*args, **kwargs)
@@ -22,20 +24,41 @@ class CustomSocket(socket.socket):
         self.eport = 0
         self.sport = 0
 
+    @classmethod
+    def copy(self, sock):
+        print(sock.fileno())
+        fd = socket.dup(sock.fileno())
+        copy = self(sock.family, sock.type, sock.proto, fileno=fd)
+        copy.settimeout(sock.gettimeout())
+        return copy
+
 def signal_handler(signal, frame):
     global running
     running = False
 
-def recv_all(s, data_len):
+def recv_all(s, data_len, timeout=10):
+    global running
     data = b''
+    start_time = time.time()
 
-    while len(data) < data_len:
-        t_data = s.recv(data_len - len(data))
+    print('Getting:', data_len)
+    while len(data) < data_len and running:
+        ins = select.select([s], [], [], 0.01)[0]
+        if s in ins:
+            t_data = s.recv(data_len - len(data))
 
-        if t_data == b'':
+            if t_data == b'':
+                return b''
+
+            data += t_data
+
+            start_time = time.time()
+
+        elif time.time() - start_time > timeout:
             return b''
 
-        data += t_data
+    if len(data) < data_len:
+        return b''
 
     return data
 
@@ -91,18 +114,19 @@ class Client(Thread):
 
             for s in ins:
                 if s in self.socks.values():
-                    try:
-                        if s == self.master_sock:
-                            data = s.recv(4)
-                            if len(data) != 4:
-                                self.kill()
+                    data = b''
+                    #try:
+                    if s == self.master_sock:
+                        data = s.recv(4)
+                        if len(data) != 4:
+                            self.kill()
 
-                            data = recv_all(s, struct.unpack('<I', data)[0])
+                        data = recv_all(s, struct.unpack('<I', data)[0])
 
-                        else:
-                            data = s.recv(65535)
-                    except:
-                        print('Recv error!')
+                    else:
+                        data = s.recv(65535)
+                    #except:
+                    #    print('Recv error!', e)
 
                     if data == b'':
                         # lost master
@@ -113,7 +137,7 @@ class Client(Thread):
                         # lost client
                         else:
                             bin_data = struct.pack('<BHH' + str(len(data)) + 's', CLOSE, s.sport-1, s.eport, b'\0')
-                            bin_data = struct.pack('<I', len(bin_data)) + bin_dat
+                            bin_data = struct.pack('<I', len(bin_data)) + bin_data
                             try:
                                 self.master_sock.send(bin_data)
                             except:
@@ -128,12 +152,13 @@ class Client(Thread):
 
                     else:
                         if s == self.master_sock:
+                            print(len(data), repr(data))
                             data = struct.unpack('<BHH' + str(len(data[5:])) + 's', data)
                             data = {'cmd': data[0], 'sport': data[1], 'eport': data[2], 'payload': data[3]}
 
                             if data['cmd'] == OPEN:
                                 #TODO: fix +1
-                                self.connect('127.0.0.1', data['sport']+1, data['eport'])
+                                self.connect('127.0.0.1', data['sport'], data['eport'])
 
                             elif data['cmd'] == CLOSE:
                                 if data['eport'] in self.socks.keys():
@@ -151,7 +176,7 @@ class Client(Thread):
 
                         else:
                             # TODO: fix -1
-                            bin_data = struct.pack('<BHH' + str(len(data)) + 's', DATA, s.sport-1, s.eport, data)
+                            bin_data = struct.pack('<BHH' + str(len(data)) + 's', DATA, s.sport, s.eport, data)
                             bin_data = struct.pack('<I', len(bin_data)) + bin_data
                             try:
                                 self.master_sock.send(bin_data)
@@ -270,7 +295,11 @@ class Listener(Thread):
             for s in ins:
                 # new connection
                 if 0 in self.socks.keys() and s == self.socks[0]:
-                    c, addr = self.socks[0].accept()
+                    co, addr = self.socks[0].accept()
+                    c = CustomSocket.copy(co)
+                    c.eport = addr[1]
+                    c.sport = s.getsockname()[1]
+                    co.close()
                     print('Connection from: ', addr)
 
                     # only allow 1 master connection
@@ -307,14 +336,14 @@ class Listener(Thread):
                             if not self.start_socket():
                                 continue
 
-                            self.pipe[1].send({'sport': s.getsockname()[1], 'eport': addr[1], 'cmd': NOTREADY, 'payload': b'\0'})
+                            self.pipe[1].send({'sport': s.sport, 'eport': s.eport, 'cmd': NOTREADY, 'payload': b'\0'})
 
                         # lost client
                         else:
-                            self.pipe[1].send({'sport': s.getsockname()[1], 'eport': s.getpeername()[1], 'cmd': CLOSE, 'payload': b'\0'})
+                            self.pipe[1].send({'sport': s.sport, 'eport': s.eport, 'cmd': CLOSE, 'payload': b'\0'})
 
                         # remove port
-                        self.close_socket(s.getpeername()[1])
+                        self.close_socket(s.eport)
                         continue
 
                     else:
@@ -322,7 +351,7 @@ class Listener(Thread):
                             data = struct.unpack('<BHH' + str(len(data[5:])) + 's', data)
                             self.pipe[1].send({'cmd': data[0], 'sport': data[1], 'eport': data[2], 'payload': data[3]})
                         else:
-                            self.pipe[1].send({'sport': s.getsockname()[1], 'eport': s.getpeername()[1], 'cmd': DATA, 'payload': data})
+                            self.pipe[1].send({'sport': s.sport, 'eport': s.eport, 'cmd': DATA, 'payload': data})
 
             # send out data to clients
             while self.pipe[1].poll():
@@ -336,7 +365,7 @@ class Listener(Thread):
                             self.socks[list(self.socks.keys())[0]].send(bin_data)
                         except:
                             self.close_socket(0)
-                            self.pipe[1].send({'sport': s.getsockname()[1], 'eport': addr[1], 'cmd': NOTREADY, 'payload': b'\0'})
+                            self.pipe[1].send({'sport': s.sport, 'eport': s.eport, 'cmd': NOTREADY, 'payload': b'\0'})
                             self.start_socket()
                     else:
                         if data['cmd'] == CLOSE:
