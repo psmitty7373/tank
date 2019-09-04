@@ -36,6 +36,17 @@ def signal_handler(signal, frame):
     global running
     running = False
 
+
+#class SocketThread(Thread):
+def recv(s, data_len):
+    data = b''
+    try:
+        data = s.recv(data_len)
+    except:
+        return b''
+    return data
+
+
 def recv_all(s, data_len, timeout=10):
     global running
     data = b''
@@ -45,7 +56,7 @@ def recv_all(s, data_len, timeout=10):
     while len(data) < data_len and running:
         ins = select.select([s], [], [], 0.01)[0]
         if s in ins:
-            t_data = s.recv(data_len - len(data))
+            t_data = recv(s, data_len - len(data))
 
             if t_data == b'':
                 return b''
@@ -61,6 +72,10 @@ def recv_all(s, data_len, timeout=10):
         return b''
 
     return data
+
+def send_all(s, data):
+    return
+
 
 class Client(Thread):
     def __init__(self, ip, port):
@@ -117,14 +132,14 @@ class Client(Thread):
                     data = b''
                     #try:
                     if s == self.master_sock:
-                        data = s.recv(4)
+                        data = recv(s, 4)
                         if len(data) != 4:
                             self.kill()
 
                         data = recv_all(s, struct.unpack('<I', data)[0])
 
                     else:
-                        data = s.recv(65535)
+                        data = recv(s, 65535)
                     #except:
                     #    print('Recv error!', e)
 
@@ -316,7 +331,7 @@ class Listener(Thread):
                 elif s in self.socks.values():
                     if self.is_master:
                         try:
-                            data = s.recv(4)
+                            data = recv_all(s, 4)
                             if len(data) != 4:
                                 data = b''
 
@@ -326,7 +341,7 @@ class Listener(Thread):
 
                     else:
                         try:
-                            data = s.recv(65535)
+                            data = recv(s, 65535)
                         except:
                             data = b''
 
