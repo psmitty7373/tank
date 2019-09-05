@@ -45,9 +45,10 @@ class SocketThread(Thread):
         self.eport = eport
         self.sport = port
         self.pipe = Pipe(True)
+        self.running = True
+        self.ready = False
         self.is_master = is_master
         self.is_listener = is_listener
-        self.running = True
         self.is_connected = False
         if s:
             self.is_connected = True
@@ -151,22 +152,35 @@ class SocketThread(Thread):
                         break
 
                     print('Connection from: ', addr)
-                    self.pipe[1].send({'s': c, 'sport': self.sport, 'eport': addr[1], 'cmd': NEW, 'master': self.is_master, 'payload': b'\0'})
-                    print('sent!')
+                    if self.is_master:
+                        if not self.ready:
+                            self.ready = True
+                            self.pipe[1].send({'s': c, 'sport': self.sport, 'eport': addr[1], 'cmd': NEW, 'master': True, 'payload': b'\0'})
+                            self.pipe[1].send({'sport': self.sport, 'eport': addr[1], 'cmd': READY, 'payload': b'\0'})
+                        else:
+                            c.close()
+
+                    else:
+                        if self.ready:
+                            self.pipe[1].send({'s': c, 'sport': self.sport, 'eport': addr[1], 'cmd': NEW, 'master': False, 'payload': b'\0'})
+                        else:
+                            c.close()
+
+
 
         else:
-            print(self.running, self.is_master, self.is_connected)
             while self.running:
                 if not self.is_connected and not self.connect():
                     if self.is_master:
                         time.sleep(1)
                         continue
                     else:
+                        self.pipe[1].send({'sport': s.sport, 'eport': s.eport, 'cmd': READY, 'payload': b'\0'})
+                        self.ready = True
                         break
 
                 else:
-                    print('here2')
-                    ins = select.select([self.s, self.pipe[1]], [], [], 0.5)[0]
+                    ins = select.select([self.s, self.pipe[1]], [], [], 0.01)[0]
                     if self.s in ins:
                         if self.is_master:
                             data = self.recv_all(4)
@@ -176,12 +190,18 @@ class SocketThread(Thread):
                         else:
                             data = self.recv(65535)
 
+                        # connection lost
                         if data == b'':
                             # lost master
                             if self.is_master:
-                                self.s.close()
-                                self.is_connected = False
-                                continue
+                                self.ready = False
+                                self.pipe[1].send({'sport': self.sport, 'eport': self.eport, 'cmd': NOTREADY, 'payload': b'\0'})
+                                if self.ip:
+                                    self.s.close()
+                                    self.is_connected = False
+                                    continue
+                                else:
+                                    self.kill()
 
                             # lost client
                             else:
@@ -204,6 +224,11 @@ class SocketThread(Thread):
 
                     if self.pipe[1] in ins:
                         data = self.pipe[1].recv()
+
+                        if type(data) == dict:
+                            data = struct.pack('<BHH' + str(len(data['payload'])) + 's', data['cmd'], data['sport'], data['eport'], data['payload'])
+                            data = struct.pack('<I', len(data)) + data
+     
                         self.send_all(data)
 
         self.kill()
@@ -215,9 +240,11 @@ class Relay(Thread):
         self.server_port = port
         self.server_ip = ip
         self.master_socket = SocketThread(ip, port, is_master=True, is_listener=is_server)
-        self.master_pipe = self.master_socket.pipe[0]
+        if is_server:
+            self.pipes = { port: self.master_socket.pipe[0] }
+        else:
+            self.pipes = { 'master':  self.master_socket.pipe[0] }
         self.socks = {}
-        self.pipes = {}
         self.running = True
 
     def kill(self):
@@ -241,14 +268,11 @@ class Relay(Thread):
     def run(self):
         self.master_socket.start()
         while self.running:
-            print('here', self.pipes)
-            inp = select.select([ self.master_pipe ] + list(self.pipes.values()), [], [], 0.5)[0]
+            inp = select.select(list(self.pipes.values()), [], [], 0.5)[0]
             for p in inp:
-                print(p)
+                data = p.recv()
                 #data from master
-                if p == self.master_socket.pipe[0]:
-                    data = p.recv()
-                    print(data)
+                if type(data) == dict:
                     if data['cmd'] == OPEN:
                         if data['eport'] not in self.socks.keys():
                             st = SocketThread('127.0.0.1', data['sport'], data['eport'])
@@ -275,27 +299,47 @@ class Relay(Thread):
                                 self.socks[data['eport']].join()
                                 del self.socks[data['eport']]
 
+                    elif data['cmd'] == NOTREADY:
+                        print('not ready')
+                        for st in self.socks.values():
+                            if st.is_listener:
+                                st.running = False
+                                st.kill()
+                                st.join()
+                            else:
+                                st.ready = False
+
+                    elif data['cmd'] == READY:
+                        print('ready')
+                        for st in self.socks.values():
+                            if st.is_listener:
+                                st.ready = True
+
                     elif data['cmd'] == NEW:
-                        print('new')
                         st = SocketThread(port=data['sport'], eport=data['eport'], s=data['s'])
 
-                        # only one master, yo
-                        if data['master'] and 0 in self.socks.keys():
-                            print('nother master')
-                            st.running = False
-                            st.kill()
-                            continue
+                        if data['master']:
+                            st.is_master = True
+                            st.start()
+                            self.socks['master'] = st
+                            self.pipes['master'] = st.pipe[0]
+                                
+                        else:
+                            if 'master' in self.pipes.keys():
+                                self.pipes['master'].send({'sport': data['sport'], 'eport': data['eport'], 'cmd': OPEN, 'payload': b'\0'})                            
+                                st.start()
+                                self.socks[data['eport']] = st
+                                self.pipes[data['eport']] = st.pipe[0]
 
-                        st.is_master = data['master']
-                        st.start()
-                        self.socks[0] = st
-                        self.pipes[0] = st.pipe[0]
-                        print(self.socks)
+                            else:
+                                st.running = False
+                                st.kill()
+
 
                 #data from clients
                 else:
-                    data = p.recv()
-                    self.master_socket.pipe[0].send(data)
+                    if 'master' in self.pipes.keys():
+                        self.pipes['master'].send(data)
 
         self.kill()
 
