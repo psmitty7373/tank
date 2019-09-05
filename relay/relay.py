@@ -140,7 +140,10 @@ class SocketThread(Thread):
 
     def run(self):
         if self.is_listener:
-            self.listen()
+            if not self.listen():
+                self.running = False
+                self.kill()
+
             while self.running:
                 ins = select.select([self.s, self.pipe[1]], [], [], 0.5)[0]
                 if self.s in ins:
@@ -158,7 +161,6 @@ class SocketThread(Thread):
                             self.pipe[1].send({'s': c, 'sport': self.sport, 'eport': addr[1], 'cmd': NEW, 'master': True, 'payload': b'\0'})
                             self.pipe[1].send({'sport': self.sport, 'eport': addr[1], 'cmd': READY, 'payload': b'\0'})
                         else:
-                            print('kill')
                             c.close()
 
                     else:
@@ -299,7 +301,7 @@ class Relay(Thread):
                                 del self.socks[data['eport']]
 
                     elif data['cmd'] == NOTREADY:
-                        print('not ready')
+                        self.master_socket.ready = False
                         for st in self.socks.values():
                             if st.is_listener:
                                 st.ready = False
@@ -309,7 +311,7 @@ class Relay(Thread):
                                 st.join()
 
                     elif data['cmd'] == READY:
-                        print('ready')
+                        self.master_socket.ready = True
                         for st in self.socks.values():
                             if st.is_listener:
                                 st.ready = True
