@@ -14,13 +14,13 @@ DATA = 2
 READY = 3
 NOTREADY = 4
 ERROR = 5
+NEW = 6
 
 running = True
 
 class CustomSocket(socket.socket):
     def __init__(self, *args, **kwargs):
         super(CustomSocket, self).__init__(*args, **kwargs)
-        self.lport = 0
         self.eport = 0
         self.sport = 0
 
@@ -32,178 +32,274 @@ class CustomSocket(socket.socket):
         copy.settimeout(sock.gettimeout())
         return copy
 
+
 def signal_handler(signal, frame):
     global running
     running = False
 
-
-#class SocketThread(Thread):
-def recv(s, data_len):
-    data = b''
-    try:
-        data = s.recv(data_len)
-    except:
-        return b''
-    return data
-
-
-def recv_all(s, data_len, timeout=10):
-    global running
-    data = b''
-    start_time = time.time()
-
-    print('Getting:', data_len)
-    while len(data) < data_len and running:
-        ins = select.select([s], [], [], 0.01)[0]
-        if s in ins:
-            t_data = recv(s, data_len - len(data))
-
-            if t_data == b'':
-                return b''
-
-            data += t_data
-
-            start_time = time.time()
-
-        elif time.time() - start_time > timeout:
-            return b''
-
-    if len(data) < data_len:
-        return b''
-
-    return data
-
-def send_all(s, data):
-    return
-
-
-class Client(Thread):
-    def __init__(self, ip, port):
-        super(Client, self).__init__()
-        self.server_port = port
-        self.server_ip = ip
-        self.socks = {}
-        self.master_sock = None
+class SocketThread(Thread):
+    def __init__(self, ip=None, port=None, eport=0, is_master=False, is_listener=False, s=None):
+        super(SocketThread, self).__init__()
+        self.s = s
+        self.ip = ip
+        self.eport = eport
+        self.sport = port
+        self.pipe = Pipe(True)
+        self.is_master = is_master
+        self.is_listener = is_listener
         self.running = True
+        self.is_connected = False
+        if s:
+            self.is_connected = True
 
-    def connect(self, ip, port, eport=0, master=False):
+    def connect(self):
         try:
-            s = CustomSocket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect((ip, port))
-            s.setblocking(0)
+            print ('Opened:', self.eport, self.sport)
+            self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.s.connect((self.ip, self.sport))
 
-            if master:
-                self.socks[0] = s
-                self.master_sock = s
-            else:
-                self.socks[eport] = s
-
-            s.sport = port
-            s.eport = eport
-            s.lport = s.getsockname()[1]
-
-            print ('Opened:', s.eport, s.sport, s.lport)
-
+            self.is_connected = True
             return True
 
         except:
             print('Error connecting to server.')
             return False
 
+    def listen(self):
+        print('Starting socket:', self.ip, self.sport)
+        try:
+            self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.s.bind((self.ip, self.sport))
+            if self.is_master:
+                self.s.listen(1)
+            else:
+                self.s.listen(25)
+        except:
+            print('Error listening on port:', self.sport)
+            return False
+
+        return True
+
     def kill(self):
-        for s in self.socks.values():
-            s.close()
-        self.socks = {}
+        if self.s:
+            self.s.close()
+        self.is_connected = False
+        self.running = False
+        return
+
+    def send_all(self, data, timeout=10):
+        start_time = time.time()
+
+        while len(data) > 0 and self.running:
+            outs = select.select([], [self.s], [], 0.01)[1]
+            if self.s in outs:
+                sent_len = self.s.send(data)
+                data = data[sent_len:]
+                
+                start_time = time.time()
+
+            elif time.time() - start_time > timeout:
+                return False
+
+        return True
+
+    def recv(self, data_len):
+        data = b''
+        try:
+            data = self.s.recv(data_len)
+        except:
+            return b''
+        return data
+
+    def recv_all(self, data_len, timeout=10):
+        data = b''
+        start_time = time.time()
+
+        print('Getting:', data_len)
+        while len(data) < data_len and self.running:
+            ins = select.select([self.s], [], [], 0.01)[0]
+            if self.s in ins:
+                t_data = self.recv(data_len - len(data))
+
+                if t_data == b'':
+                    return b''
+
+                data += t_data
+
+                start_time = time.time()
+
+            elif time.time() - start_time > timeout:
+                return b''
+
+        if len(data) < data_len:
+            return b''
+
+        return data
 
     def run(self):
-        while running:
-            if 0 not in self.socks.keys():
-                print('Connecting...')
-                if not self.connect(self.server_ip, self.server_port, master=True):
-                    time.sleep(5)
-                    continue
-            try:
-                ins = select.select(list(self.socks.values()), [], [], 0.01)[0]
-            except:
-                print('Socket selection error!')
+        if self.is_listener:
+            self.listen()
+            while self.running:
+                ins = select.select([self.s, self.pipe[1]], [], [], 0.5)[0]
+                if self.s in ins:
+                    try:
+                        c, addr = self.s.accept()
+                    except:
+                        print('Socket accept error!')
+                        self.running = False
+                        break
 
-            for s in ins:
-                if s in self.socks.values():
-                    data = b''
-                    #try:
-                    if s == self.master_sock:
-                        data = recv(s, 4)
-                        if len(data) != 4:
-                            self.kill()
+                    print('Connection from: ', addr)
+                    self.pipe[1].send({'s': c, 'sport': self.sport, 'eport': addr[1], 'cmd': NEW, 'master': self.is_master, 'payload': b'\0'})
+                    print('sent!')
 
-                        data = recv_all(s, struct.unpack('<I', data)[0])
-
-                    else:
-                        data = recv(s, 65535)
-                    #except:
-                    #    print('Recv error!', e)
-
-                    if data == b'':
-                        # lost master
-                        if s == self.master_sock:
-                            self.kill()
-                            continue
-
-                        # lost client
-                        else:
-                            bin_data = struct.pack('<BHH' + str(len(data)) + 's', CLOSE, s.sport-1, s.eport, b'\0')
-                            bin_data = struct.pack('<I', len(bin_data)) + bin_data
-                            try:
-                                self.master_sock.send(bin_data)
-                            except:
-                                print('Transmit error.')
-                                self.kill()
-                                continue
-
-                        # remove port
-                        del self.socks[s.eport]
-                        s.close()
+        else:
+            print(self.running, self.is_master, self.is_connected)
+            while self.running:
+                if not self.is_connected and not self.connect():
+                    if self.is_master:
+                        time.sleep(1)
                         continue
-
                     else:
-                        if s == self.master_sock:
-                            print(len(data), repr(data))
-                            data = struct.unpack('<BHH' + str(len(data[5:])) + 's', data)
-                            data = {'cmd': data[0], 'sport': data[1], 'eport': data[2], 'payload': data[3]}
+                        break
 
-                            if data['cmd'] == OPEN:
-                                #TODO: fix +1
-                                self.connect('127.0.0.1', data['sport'], data['eport'])
-
-                            elif data['cmd'] == CLOSE:
-                                if data['eport'] in self.socks.keys():
-                                    self.socks[data['eport']].close()
-                                    del self.socks[data['eport']]
-
-                            elif data['cmd'] == DATA:
-                                if data['eport'] in self.socks.keys():
-                                    try:
-                                        self.socks[data['eport']].send(data['payload'])
-                                    except:
-                                        print('Transmit error.')
-                                        self.socks[data['eport']].close()
-                                        del self.socks[data['eport']]
+                else:
+                    print('here2')
+                    ins = select.select([self.s, self.pipe[1]], [], [], 0.5)[0]
+                    if self.s in ins:
+                        if self.is_master:
+                            data = self.recv_all(4)
+                            if len(data) == 4:
+                                data = self.recv_all(struct.unpack('<I', data)[0])
 
                         else:
-                            # TODO: fix -1
-                            bin_data = struct.pack('<BHH' + str(len(data)) + 's', DATA, s.sport, s.eport, data)
-                            bin_data = struct.pack('<I', len(bin_data)) + bin_data
-                            try:
-                                self.master_sock.send(bin_data)
-                            except:
-                                print('Transmit error')
-                                self.kill()
+                            data = self.recv(65535)
+
+                        if data == b'':
+                            # lost master
+                            if self.is_master:
+                                self.s.close()
+                                self.is_connected = False
                                 continue
-                else:
-                    s.close()
+
+                            # lost client
+                            else:
+                                bin_data = struct.pack('<BHH' + str(len(data)) + 's', CLOSE, self.sport, self.eport, b'\0')
+                                bin_data = struct.pack('<I', len(bin_data)) + bin_data
+                                self.pipe[1].send(bin_data)
+                                self.kill()
+
+                        else:
+                            out_data = None
+                            if self.is_master:
+                                data = struct.unpack('<BHH' + str(len(data[5:])) + 's', data)
+                                out_data = {'cmd': data[0], 'sport': data[1], 'eport': data[2], 'payload': data[3]}
+
+                            else:
+                                out_data = struct.pack('<BHH' + str(len(data)) + 's', DATA, self.sport, self.eport, data)
+                                out_data = struct.pack('<I', len(out_data)) + out_data
+
+                            self.pipe[1].send(out_data)
+
+                    if self.pipe[1] in ins:
+                        data = self.pipe[1].recv()
+                        self.send_all(data)
 
         self.kill()
 
+
+class Relay(Thread):
+    def __init__(self, ip, port, is_server=False):
+        super(Relay, self).__init__()
+        self.server_port = port
+        self.server_ip = ip
+        self.master_socket = SocketThread(ip, port, is_master=True, is_listener=is_server)
+        self.master_pipe = self.master_socket.pipe[0]
+        self.socks = {}
+        self.pipes = {}
+        self.running = True
+
+    def kill(self):
+        for s in self.socks.values():
+            s.running = False
+            s.kill()
+            s.join()
+        self.master_socket.running = False
+        self.master_socket.join()
+
+    def add_listener(self, ip, port):
+        if port not in self.socks.keys():
+            st = SocketThread(ip, port, is_master=False, is_listener=True)
+            st.start()
+            self.socks[port] = st
+            self.pipes[port] = st.pipe[0]
+            return True
+
+        return False
+
+    def run(self):
+        self.master_socket.start()
+        while self.running:
+            print('here', self.pipes)
+            inp = select.select([ self.master_pipe ] + list(self.pipes.values()), [], [], 0.5)[0]
+            for p in inp:
+                print(p)
+                #data from master
+                if p == self.master_socket.pipe[0]:
+                    data = p.recv()
+                    print(data)
+                    if data['cmd'] == OPEN:
+                        if data['eport'] not in self.socks.keys():
+                            st = SocketThread('127.0.0.1', data['sport'], data['eport'])
+                            st.start()
+                            self.socks[data['eport']] = st
+                            self.pipes[data['eport']] = st.pipe[0]
+
+                    elif data['cmd'] == CLOSE:
+                        if data['eport'] in self.socks.keys():
+                            self.socks[data['eport']].kill()
+                            del self.pipes[data['eport']]
+                            self.socks[data['eport']].running = False
+                            self.socks[data['eport']].join()
+                            del self.socks[data['eport']]
+
+                    elif data['cmd'] == DATA:
+                        if data['eport'] in self.socks.keys() and data['eport'] in self.pipes.keys():
+                            try:
+                                self.pipes[data['eport']].send(data['payload'])
+                            except:
+                                self.socks[data['eport']].kill()
+                                del self.pipes[data['eport']]
+                                self.socks[data['eport']].running = False
+                                self.socks[data['eport']].join()
+                                del self.socks[data['eport']]
+
+                    elif data['cmd'] == NEW:
+                        print('new')
+                        st = SocketThread(port=data['sport'], eport=data['eport'], s=data['s'])
+
+                        # only one master, yo
+                        if data['master'] and 0 in self.socks.keys():
+                            print('nother master')
+                            st.running = False
+                            st.kill()
+                            continue
+
+                        st.is_master = data['master']
+                        st.start()
+                        self.socks[0] = st
+                        self.pipes[0] = st.pipe[0]
+                        print(self.socks)
+
+                #data from clients
+                else:
+                    data = p.recv()
+                    self.master_socket.pipe[0].send(data)
+
+        self.kill()
+
+'''
 class Server(Thread):
     def __init__(self, port):
         super(Server, self).__init__()
@@ -332,10 +428,8 @@ class Listener(Thread):
                     if self.is_master:
                         try:
                             data = recv_all(s, 4)
-                            if len(data) != 4:
-                                data = b''
-
-                            data = recv_all(s, struct.unpack('<I', data)[0])
+                            if len(data) == 4:
+                                data = recv_all(s, struct.unpack('<I', data)[0])
                         except:
                             data = b''
 
@@ -393,6 +487,7 @@ class Listener(Thread):
 
         # close all connections
         self.kill()
+'''
 
 def main():
     global running
@@ -413,19 +508,19 @@ def main():
             p.print_help(sys.stderr)
             sys.exit() 
 
-        client_thread = Client(args.u, args.p)
+        client_thread = Relay(args.u, args.p)
         client_thread.start()
 
     elif args.mode == 'server':
         print('Starting server!')
-        server_thread = Server(5555)
+        server_thread = Relay('0.0.0.0', 5555, is_server=True)
         server_thread.start()
 
         # ports
         if args.l:
             for l in args.l:
                 print('Starting listener on: ', l)
-                server_thread.add_port('0.0.0.0', l)
+                server_thread.add_listener('0.0.0.0', l)
     else:
         p.print_help(sys.stderr)
         sys.exit()
@@ -437,6 +532,10 @@ def main():
     if args.mode == 'server':
         server_thread.running = False
         server_thread.join()
+
+    else:
+        client_thread.running = False
+        client_thread.join()
     
 if __name__ == "__main__":
     main()
