@@ -57,6 +57,7 @@ class SocketThread(Thread):
         try:
             print ('Opened:', self.eport, self.sport)
             self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.s.settimeout(5)
             self.s.connect((self.ip, self.sport))
 
             self.is_connected = True
@@ -117,7 +118,6 @@ class SocketThread(Thread):
         data = b''
         start_time = time.time()
 
-        print('Getting:', data_len)
         while len(data) < data_len and self.running:
             ins = select.select([self.s], [], [], 0.01)[0]
             if self.s in ins:
@@ -176,7 +176,7 @@ class SocketThread(Thread):
                         time.sleep(1)
                         continue
                     else:
-                        self.pipe[1].send({'sport': s.sport, 'eport': s.eport, 'cmd': READY, 'payload': b'\0'})
+                        self.pipe[1].send({'sport': self.s.sport, 'eport': self.s.eport, 'cmd': READY, 'payload': b'\0'})
                         self.ready = True
                         break
 
@@ -369,7 +369,7 @@ def main():
 
     elif args.mode == 'server':
         print('Starting server!')
-        server_thread = Relay('0.0.0.0', 5555, is_server=True)
+        server_thread = Relay('0.0.0.0', args.p, is_server=True)
         server_thread.start()
 
         # ports

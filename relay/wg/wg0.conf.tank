@@ -1,0 +1,10 @@
+[Interface]
+PrivateKey = <client priv-key>
+ListenPort = 9998
+Address = 10.0.0.2
+
+[Peer]
+PublicKey = <server pub-key>
+Allowedips = 10.0.0.0/24
+Endpoint = 45.79.167.100:9998
+PersistentKeepalive = 25
